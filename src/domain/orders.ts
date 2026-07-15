@@ -5,6 +5,7 @@ import { getMenuItem } from './menu.js'
 
 export type PayMethod = 'cash' | 'points'
 export type OrderStatus = 'received' | 'accepted' | 'fulfilled' | 'cancelled'
+export type OrderSource = 'terminal' | 'pos'
 export type OrderErrCode = 'empty' | 'insufficient'
 
 export interface OrderRow {
@@ -16,6 +17,7 @@ export interface OrderRow {
   total_deni: number
   total_points: number
   status: OrderStatus
+  source: OrderSource
   created_at: string
   updated_at: string
   fulfilled_by: string | null
@@ -31,7 +33,7 @@ export type OrderResult =
   | { ok: true; orderId: string; number: number; balanceDeni: number; points: number }
   | { ok: false; code: OrderErrCode }
 
-interface PricedLine {
+export interface PricedLine {
   drinkId: number
   name: string
   qty: number
@@ -46,8 +48,10 @@ interface PricedLine {
  *
  * Mirrors the prototype: unknown drinks, non-positive quantities and
  * unavailable drinks are silently skipped rather than failing the order.
+ *
+ * Exported so POS can quote a cart without duplicating the menu maths.
  */
-function priceLines(db: Db, items: OrderRequestItem[]): PricedLine[] {
+export function priceLines(db: Db, items: OrderRequestItem[]): PricedLine[] {
   const lines: PricedLine[] = []
   for (const item of items) {
     const menuItem = getMenuItem(db, item.drink)
@@ -182,6 +186,8 @@ export function placeOrder(
     sessionId?: string | null
     pay: PayMethod
     items: OrderRequestItem[]
+    /** Where the order came from: the card terminal, or staff at the POS. */
+    source?: OrderSource
   }
 ): OrderResult {
   const lines = priceLines(db, opts.items)
@@ -204,9 +210,18 @@ export function placeOrder(
     }
 
     db.prepare(
-      `INSERT INTO orders (id, number, card_id, session_id, pay_method, total_deni, total_points)
-       VALUES (?, ?, ?, ?, ?, ?, ?)`
-    ).run(orderId, next.n, opts.cardId, opts.sessionId ?? null, opts.pay, totalDeni, totalPoints)
+      `INSERT INTO orders (id, number, card_id, session_id, pay_method, total_deni, total_points, source)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
+    ).run(
+      orderId,
+      next.n,
+      opts.cardId,
+      opts.sessionId ?? null,
+      opts.pay,
+      totalDeni,
+      totalPoints,
+      opts.source ?? 'terminal'
+    )
 
     const insertLine = db.prepare(
       `INSERT INTO order_items

@@ -167,5 +167,52 @@ export const migrations: Migration[] = [
       );
       CREATE INDEX idx_audit_created ON audit_log(created_at);
     `
+  },
+  {
+    // POS tap-to-pay. Additive only: 001 has already been applied to live
+    // databases, and editing an applied migration leaves them silently behind
+    // the schema (in-memory test DBs are built fresh and would never catch it).
+    name: '002_pos',
+    sql: `
+      -- Two readers, two UID spellings, one card:
+      --   RC522 terminal -> "9C 76 5A F4"  (uppercase, space-separated)
+      --   Web NFC/Chrome -> "9c:76:5a:f4"  (lowercase, colon-separated)
+      -- card_uid keeps whatever the registrar typed; card_uid_canon is what we
+      -- actually match on. Without this no POS tap would ever find its card.
+      ALTER TABLE cards ADD COLUMN card_uid_canon TEXT;
+      UPDATE cards
+         SET card_uid_canon = REPLACE(REPLACE(REPLACE(UPPER(card_uid), ' ', ''), ':', ''), '-', '');
+      CREATE UNIQUE INDEX idx_cards_uid_canon ON cards(card_uid_canon);
+
+      -- 4-digit PIN, spot-checked on a random 1-in-8 of POS payments.
+      -- 10^4 combinations, so the attempt counter is what keeps the confirm
+      -- endpoint from being a brute-force oracle.
+      ALTER TABLE cards ADD COLUMN pin_hash TEXT;
+      ALTER TABLE cards ADD COLUMN pin_failed_attempts INTEGER NOT NULL DEFAULT 0;
+      ALTER TABLE cards ADD COLUMN pin_locked_until TEXT;
+
+      -- Tells bar sales from machine-side orders in reports.
+      ALTER TABLE orders ADD COLUMN source TEXT NOT NULL DEFAULT 'terminal';
+
+      -- A priced, single-use payment authorisation. pin_required is decided and
+      -- stored HERE, server-side, so a client cannot dodge the check by simply
+      -- omitting the PIN on confirm.
+      CREATE TABLE pos_intents (
+        id             TEXT PRIMARY KEY,
+        card_id        TEXT NOT NULL REFERENCES cards(id),
+        staff_username TEXT NOT NULL,
+        pay_method     TEXT NOT NULL CHECK (pay_method IN ('cash','points')),
+        items_json     TEXT NOT NULL,
+        total_deni     INTEGER NOT NULL,
+        total_points   INTEGER NOT NULL,
+        pin_required   INTEGER NOT NULL,
+        state          TEXT NOT NULL DEFAULT 'pending'
+                         CHECK (state IN ('pending','consumed','expired')),
+        created_at     TEXT NOT NULL DEFAULT (datetime('now')),
+        expires_at     TEXT NOT NULL,
+        order_id       TEXT REFERENCES orders(id)
+      );
+      CREATE INDEX idx_pos_intents_state ON pos_intents(state);
+    `
   }
 ]

@@ -8,6 +8,7 @@ import type { StaffDeps } from './deps.js'
 import { menuRouter } from './routes/menu.js'
 import { ordersRouter } from './routes/orders.js'
 import { playersRouter } from './routes/players.js'
+import { posRouter } from './routes/pos.js'
 import { reportsRouter } from './routes/reports.js'
 import { ticketsRouter } from './routes/tickets.js'
 import { authenticate, currentUser, requireAuth, SESSION_COOKIE } from './staffAuth.js'
@@ -61,6 +62,7 @@ export function createStaffApp(deps: StaffDeps): express.Express {
   api.use(ordersRouter(deps))
   api.use(menuRouter(deps))
   api.use(playersRouter(deps))
+  api.use(posRouter(deps))
   api.use(ticketsRouter(deps))
   api.use(reportsRouter(deps))
   app.use('/api', api)
