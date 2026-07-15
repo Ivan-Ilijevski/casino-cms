@@ -3,6 +3,7 @@ import { Router } from 'express'
 import { createPlayerWithCard, findCardByUid, getCard } from '../../domain/accounts.js'
 import { audit } from '../../domain/audit.js'
 import { balanceOf, historyFor, postEntry } from '../../domain/ledger.js'
+import { setPin } from '../../domain/pos.js'
 import { activeSessionForCard, closeSession } from '../../domain/sessions.js'
 import { MAX_PLAYER_NAME_BYTES, utf8Bytes } from '../../wire/limits.js'
 import { param, pushBalanceForCard, type StaffDeps } from '../deps.js'
@@ -39,7 +40,11 @@ export function playersRouter(deps: StaffDeps): Router {
     res.json(
       deps.db
         .prepare(
-          `SELECT c.*, p.name AS player_name FROM cards c
+          // has_pin, never the hash: a card without a PIN cannot be used at the POS.
+          `SELECT c.id, c.card_uid, c.player_id, c.status, c.balance_deni, c.points, c.created_at,
+                  p.name AS player_name,
+                  CASE WHEN c.pin_hash IS NOT NULL THEN 1 ELSE 0 END AS has_pin
+           FROM cards c
            JOIN players p ON p.id = c.player_id ORDER BY p.name`
         )
         .all()
@@ -63,9 +68,15 @@ export function playersRouter(deps: StaffDeps): Router {
 
   /** Registers a tapped card to a new or existing player. */
   router.post('/cards', requireRole('admin'), (req, res) => {
-    const { cardUid, playerName, playerId } = req.body ?? {}
+    const { cardUid, playerName, playerId, pin } = req.body ?? {}
     if (typeof cardUid !== 'string' || cardUid.trim() === '') {
       res.status(400).json({ error: 'cardUid is required' })
+      return
+    }
+    // Optional here, but the staff UI always sends one: a card with no PIN is
+    // refused at the POS rather than silently skipping the spot-check.
+    if (pin !== undefined && (typeof pin !== 'string' || !/^[0-9]{4}$/.test(pin))) {
+      res.status(400).json({ error: 'pin must be exactly 4 digits' })
       return
     }
     if (findCardByUid(deps.db, cardUid)) {
@@ -97,6 +108,8 @@ export function playersRouter(deps: StaffDeps): Router {
         cardId = created.card.id
         resolvedPlayerId = created.player.id
       }
+
+      if (typeof pin === 'string') setPin(deps.db, cardId, pin)
 
       // The tap has been claimed; clear it from the inbox.
       deps.db.prepare('DELETE FROM unknown_card_taps WHERE card_uid = ?').run(cardUid)

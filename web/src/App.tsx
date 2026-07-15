@@ -3,13 +3,15 @@ import { api, type StaffUser } from './api'
 import { Menu } from './views/Menu'
 import { Orders } from './views/Orders'
 import { Players } from './views/Players'
+import { Pos } from './views/Pos'
 import { Reports } from './views/Reports'
 import { Tickets } from './views/Tickets'
 
-type Tab = 'orders' | 'menu' | 'players' | 'tickets' | 'reports'
+type Tab = 'orders' | 'pos' | 'menu' | 'players' | 'tickets' | 'reports'
 
 const TABS: Array<{ key: Tab; label: string; adminOnly?: boolean }> = [
   { key: 'orders', label: 'Нарачки' },
+  { key: 'pos', label: 'Каса' },
   { key: 'menu', label: 'Мени' },
   { key: 'players', label: 'Гости' },
   { key: 'tickets', label: 'Тикети' },
@@ -127,6 +129,7 @@ export function App() {
 
       <main className="main">
         {tab === 'orders' && <Orders onCount={setPending} />}
+        {tab === 'pos' && <Pos />}
         {tab === 'menu' && <Menu isAdmin={isAdmin} />}
         {tab === 'players' && <Players isAdmin={isAdmin} />}
         {tab === 'tickets' && <Tickets isAdmin={isAdmin} />}

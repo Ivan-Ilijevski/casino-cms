@@ -46,6 +46,8 @@ export interface Card {
   balance_deni: number
   points: number
   player_name?: string
+  /** A card without a PIN cannot pay at the POS. */
+  has_pin?: number
 }
 
 export interface Ticket {
@@ -94,6 +96,22 @@ export class ApiError extends Error {
   }
 }
 
+export type PosIntentResponse =
+  | {
+      ok: true
+      intentId: string
+      player: { name: string; balance: number; points: number }
+      totalDeni: number
+      totalPoints: number
+      pinRequired: boolean
+      expiresAt: string
+    }
+  | { ok: false; code: string }
+
+export type PosConfirmResponse =
+  | { ok: true; orderId: string; number: number; balanceDeni: number; points: number }
+  | { ok: false; code: string; attemptsLeft?: number }
+
 async function req<T>(path: string, init?: RequestInit): Promise<T> {
   const res = await fetch(`/api${path}`, {
     ...init,
@@ -108,6 +126,20 @@ async function req<T>(path: string, init?: RequestInit): Promise<T> {
 
 const post = <T>(path: string, body?: unknown) =>
   req<T>(path, { method: 'POST', body: JSON.stringify(body ?? {}) })
+
+/**
+ * POS endpoints answer 400 with a machine-readable `code` for ordinary
+ * outcomes (wrong PIN, unknown card), so the caller wants the body, not a throw.
+ */
+async function raw<T>(path: string, body: unknown): Promise<T> {
+  const res = await fetch(`/api${path}`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body)
+  })
+  if (res.status === 401) throw new ApiError('not authenticated', 401)
+  return (await res.json()) as T
+}
 
 export const api = {
   me: () => req<StaffUser>('/me'),
@@ -129,7 +161,8 @@ export const api = {
     req<{ card: Card; player: { name: string }; session: unknown; history: LedgerEntry[] }>(
       `/cards/${id}`
     ),
-  registerCard: (cardUid: string, playerName: string) => post<{ card: Card }>('/cards', { cardUid, playerName }),
+  registerCard: (cardUid: string, playerName: string, pin?: string) =>
+    post<{ card: Card }>('/cards', { cardUid, playerName, ...(pin ? { pin } : {}) }),
   adjust: (id: string, unit: 'deni' | 'points', amount: number, reason: string) =>
     post<{ card: Card; balanceDeni: number; points: number }>(`/cards/${id}/adjust`, {
       unit,
@@ -139,6 +172,15 @@ export const api = {
   block: (id: string) => post<{ card: Card }>(`/cards/${id}/block`),
   unblock: (id: string) => post<{ card: Card }>(`/cards/${id}/unblock`),
   unknownTaps: () => req<UnknownTap[]>('/unknown-taps'),
+
+  setPin: (cardId: string, pin: string) => post<{ ok: true }>(`/cards/${cardId}/pin`, { pin }),
+
+  // POS is two-step on purpose: the server prices the cart AND decides whether
+  // this payment is PIN-checked, so the client cannot opt out of the check.
+  posIntent: (cardUid: string, items: Array<{ drink: number; qty: number }>, pay: 'cash' | 'points') =>
+    raw<PosIntentResponse>('/pos/intent', { cardUid, items, pay }),
+  posConfirm: (intentId: string, pin?: string) =>
+    raw<PosConfirmResponse>('/pos/confirm', { intentId, ...(pin ? { pin } : {}) }),
 
   tickets: (status?: string) => req<Ticket[]>(`/tickets${status ? `?status=${status}` : ''}`),
   issueTicket: (amountDeni: number) => post<Ticket>('/tickets', { amountDeni }),

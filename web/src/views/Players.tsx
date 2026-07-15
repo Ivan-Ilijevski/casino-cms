@@ -21,6 +21,7 @@ export function Players({ isAdmin }: { isAdmin: boolean }) {
   // Registering a tapped card: staff pick it off the inbox, no hex typing.
   const [regUid, setRegUid] = useState('')
   const [regName, setRegName] = useState('')
+  const [regPin, setRegPin] = useState('')
 
   async function load() {
     setCards(await api.cards())
@@ -42,9 +43,22 @@ export function Players({ isAdmin }: { isAdmin: boolean }) {
     e.preventDefault()
     setErr('')
     try {
-      await api.registerCard(regUid, regName)
+      await api.registerCard(regUid, regName, regPin)
       setRegUid('')
       setRegName('')
+      setRegPin('')
+      await load()
+    } catch (e) {
+      setErr((e as Error).message)
+    }
+  }
+
+  async function changePin(card: Card) {
+    const pin = prompt(`Нов 4-цифрен ПИН за ${card.player_name}:`)
+    if (!pin) return
+    setErr('')
+    try {
+      await api.setPin(card.id, pin)
       await load()
     } catch (e) {
       setErr((e as Error).message)
@@ -111,9 +125,15 @@ export function Players({ isAdmin }: { isAdmin: boolean }) {
                       ) : (
                         <span className="tag fulfilled">активна</span>
                       )}
+                      {!c.has_pin && (
+                        <span className="tag cancelled" style={{ marginLeft: 5 }} title="Не може да плаќа на касата">
+                          без пин
+                        </span>
+                      )}
                     </td>
                     {isAdmin && (
                       <td style={{ textAlign: 'right', whiteSpace: 'nowrap' }}>
+                        <button onClick={(e) => (e.stopPropagation(), void changePin(c))}>ПИН</button>{' '}
                         <button onClick={(e) => (e.stopPropagation(), void adjust(c))}>Корекција</button>{' '}
                         <button
                           className="danger"
@@ -200,6 +220,21 @@ export function Players({ isAdmin }: { isAdmin: boolean }) {
                 <div className="field">
                   <label>Име на гостин</label>
                   <input value={regName} onChange={(e) => setRegName(e.target.value)} required />
+                </div>
+                <div className="field">
+                  <label>ПИН (4 цифри)</label>
+                  <input
+                    className="mono"
+                    inputMode="numeric"
+                    pattern="[0-9]{4}"
+                    maxLength={4}
+                    value={regPin}
+                    onChange={(e) => setRegPin(e.target.value.replace(/\D/g, ''))}
+                    required
+                  />
+                  <div className="muted" style={{ fontSize: 11, marginTop: 5 }}>
+                    Се бара на секое осмо плаќање на касата.
+                  </div>
                 </div>
                 <button className="gold" type="submit" style={{ width: '100%' }}>
                   Регистрирај
