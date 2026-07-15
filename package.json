@@ -1,0 +1,45 @@
+{
+  "name": "casino-cms",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Casino Management System: SMIB card terminal backend (TCP 9020), TITO tickets + legacy voucher API (8080), staff web app (8090).",
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "dev": "tsx watch src/main.ts",
+    "dev:web": "vite",
+    "start": "node dist/main.js",
+    "build": "tsc -p tsconfig.json && vite build",
+    "build:server": "tsc -p tsconfig.json",
+    "build:web": "vite build",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "seed": "tsx src/db/seed.ts",
+    "import:vouchers": "tsx src/db/importVouchers.ts"
+  },
+  "dependencies": {
+    "better-sqlite3": "^12.2.0",
+    "cookie-parser": "^1.4.7",
+    "express": "^5.1.0"
+  },
+  "devDependencies": {
+    "@types/better-sqlite3": "^7.6.11",
+    "@types/cookie-parser": "^1.4.7",
+    "@types/express": "^5.0.0",
+    "@types/node": "^22.10.0",
+    "@types/react": "^19.2.17",
+    "@types/react-dom": "^19.2.3",
+    "@types/supertest": "^6.0.2",
+    "@vitejs/plugin-react": "^6.0.3",
+    "react": "^19.2.7",
+    "react-dom": "^19.2.7",
+    "supertest": "^7.0.0",
+    "tsx": "^4.19.2",
+    "typescript": "^5.7.2",
+    "vite": "^8.1.4",
+    "vitest": "^4.1.10"
+  }
+}
