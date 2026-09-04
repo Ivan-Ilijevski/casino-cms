@@ -11,6 +11,12 @@ export interface LedgerEntry {
   txn?: string | null
   ref?: string | null
   actor?: string
+  /**
+   * The terminal session a wire-driven entry belongs to. Firmware txns recycle
+   * across reboots, so this is what makes "have I already applied this txn?"
+   * answerable — see migration 003.
+   */
+  sessionId?: string | null
 }
 
 /** The cached column on `cards` that mirrors SUM(ledger_entries.amount) for a unit. */
@@ -32,8 +38,8 @@ export function postEntry(db: Db, entry: LedgerEntry): void {
 
   db.transaction(() => {
     db.prepare(
-      `INSERT INTO ledger_entries (card_id, unit, amount, kind, txn, ref, actor)
-       VALUES (?, ?, ?, ?, ?, ?, ?)`
+      `INSERT INTO ledger_entries (card_id, unit, amount, kind, txn, ref, actor, session_id)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
     ).run(
       entry.cardId,
       entry.unit,
@@ -41,7 +47,8 @@ export function postEntry(db: Db, entry: LedgerEntry): void {
       entry.kind,
       entry.txn ?? null,
       entry.ref ?? null,
-      entry.actor ?? 'system'
+      entry.actor ?? 'system',
+      entry.sessionId ?? null
     )
     const updated = db
       .prepare(`UPDATE cards SET ${column} = ${column} + ? WHERE id = ?`)

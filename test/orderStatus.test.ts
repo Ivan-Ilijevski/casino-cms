@@ -106,4 +106,55 @@ describe('setOrderStatus', () => {
 
     expect(setOrderStatus(db, { orderId: 'nope', status: 'fulfilled', actor: 'x' }).ok).toBe(false)
   })
+
+  describe('stock', () => {
+    const stockOf = (db: any) =>
+      (db.prepare('SELECT stock_qty AS s FROM menu_items WHERE drink_id = 1').get() as { s: number }).s
+
+    function stocked() {
+      const ctx = setup()
+      ctx.db.prepare('UPDATE menu_items SET stock_qty = 10 WHERE drink_id = 1').run()
+      return ctx
+    }
+
+    test('cancelling puts the drinks back on the shelf', () => {
+      const { db, card, session } = stocked()
+      const order = cashOrder(db, card, session) // 2 x Кафе
+      expect(stockOf(db)).toBe(8)
+
+      setOrderStatus(db, { orderId: order.orderId, status: 'cancelled', actor: 'barman' })
+
+      expect(stockOf(db)).toBe(10)
+    })
+
+    test('fulfilling keeps the decrement — the drink was poured', () => {
+      const { db, card, session } = stocked()
+      const order = cashOrder(db, card, session)
+
+      setOrderStatus(db, { orderId: order.orderId, status: 'fulfilled', actor: 'barman' })
+
+      expect(stockOf(db)).toBe(8)
+    })
+
+    test('cancelling twice restocks only once', () => {
+      const { db, card, session } = stocked()
+      const order = cashOrder(db, card, session)
+
+      setOrderStatus(db, { orderId: order.orderId, status: 'cancelled', actor: 'barman' })
+      setOrderStatus(db, { orderId: order.orderId, status: 'cancelled', actor: 'barman' })
+
+      expect(stockOf(db)).toBe(10)
+    })
+
+    test('cancelling an order for an untracked drink leaves it untracked', () => {
+      const { db, card, session } = setup()
+      const order = cashOrder(db, card, session)
+
+      setOrderStatus(db, { orderId: order.orderId, status: 'cancelled', actor: 'barman' })
+
+      expect(
+        (db.prepare('SELECT stock_qty AS s FROM menu_items WHERE drink_id = 1').get() as { s: null }).s
+      ).toBeNull()
+    })
+  })
 })

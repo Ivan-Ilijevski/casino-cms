@@ -3,7 +3,7 @@ import { beforeEach, describe, expect, test, vi } from 'vitest'
 import { DEFAULT_CONFIG } from '../src/config.js'
 import { openTestDb, type Db } from '../src/db/index.js'
 import { seed } from '../src/db/seed.js'
-import { createPlayerWithCard } from '../src/domain/accounts.js'
+import { createPlayerWithCard, findCardByUid } from '../src/domain/accounts.js'
 import { balanceOf, postEntry } from '../src/domain/ledger.js'
 import { placeOrder } from '../src/domain/orders.js'
 import { hashPassword } from '../src/domain/password.js'
@@ -230,6 +230,153 @@ describe('menu management', () => {
     expect(res.body.warning).toMatch(/16/)
     expect(res.body.items.length).toBeGreaterThan(16)
   })
+
+  test('a new drink defaults to standard-rate domestic when VAT fields are omitted', async () => {
+    const agent = await loginAs(ADMIN.username, ADMIN.password)
+
+    const res = await agent
+      .post('/api/menu')
+      .send({ drink_id: 9, name: 'Чај', price_deni: 5000, points_price: 30 })
+
+    expect(res.body).toMatchObject({ vat_type: 'A', is_domestic: 1 })
+  })
+
+  test('a new drink can be given a specific VAT band and imported flag', async () => {
+    const agent = await loginAs(ADMIN.username, ADMIN.password)
+
+    const res = await agent
+      .post('/api/menu')
+      .send({ drink_id: 9, name: 'Виски', price_deni: 25000, points_price: 0, vat_type: 'B', is_domestic: false })
+
+    expect(res.body).toMatchObject({ vat_type: 'B', is_domestic: 0 })
+  })
+
+  test('rejects a VAT band outside the four fiscal bands', async () => {
+    const agent = await loginAs(ADMIN.username, ADMIN.password)
+
+    const res = await agent
+      .post('/api/menu')
+      .send({ drink_id: 9, name: 'Чај', price_deni: 5000, points_price: 30, vat_type: 'X' })
+
+    expect(res.status).toBe(400)
+    expect(res.body.error).toMatch(/vat_type/i)
+  })
+
+  test('admin can change a drink\'s VAT band and domestic flag', async () => {
+    const agent = await loginAs(ADMIN.username, ADMIN.password)
+
+    const res = await agent.patch('/api/menu/1').send({ vat_type: 'V', is_domestic: false })
+
+    expect(res.status).toBe(200)
+    expect(res.body).toMatchObject({ vat_type: 'V', is_domestic: 0 })
+  })
+})
+
+describe('menu stock', () => {
+  const stockOf = (drinkId: number) =>
+    (db.prepare('SELECT stock_qty AS s FROM menu_items WHERE drink_id = ?').get(drinkId) as {
+      s: number | null
+    }).s
+
+  test('seeded drinks start untracked', async () => {
+    const agent = await loginAs(ADMIN.username, ADMIN.password)
+
+    const res = await agent.get('/api/menu')
+
+    expect(res.body.items.every((i: { stock_qty: null }) => i.stock_qty === null)).toBe(true)
+  })
+
+  test('admin can start tracking a drink and stop again', async () => {
+    const agent = await loginAs(ADMIN.username, ADMIN.password)
+
+    expect((await agent.patch('/api/menu/1').send({ stock_qty: 12 })).body.stock_qty).toBe(12)
+    // An explicit null is the only way back to untracked, and COALESCE could
+    // not express it — this is the case that regression-proofs the CASE WHEN.
+    expect((await agent.patch('/api/menu/1').send({ stock_qty: null })).body.stock_qty).toBeNull()
+  })
+
+  test('a patch that does not mention stock leaves it alone', async () => {
+    const agent = await loginAs(ADMIN.username, ADMIN.password)
+    await agent.patch('/api/menu/1').send({ stock_qty: 7 })
+
+    await agent.patch('/api/menu/1').send({ name: 'Еспресо' })
+
+    expect(stockOf(1)).toBe(7)
+  })
+
+  test('rejects a negative stock', async () => {
+    const agent = await loginAs(ADMIN.username, ADMIN.password)
+
+    const res = await agent.patch('/api/menu/1').send({ stock_qty: -1 })
+
+    expect(res.status).toBe(400)
+  })
+
+  test('non-admin staff may restock — the whole point of the endpoint', async () => {
+    const admin = await loginAs(ADMIN.username, ADMIN.password)
+    await admin.patch('/api/menu/1').send({ stock_qty: 3 })
+    const barman = await loginAs('barman', ADMIN.password)
+
+    const res = await barman.post('/api/menu/1/stock').send({ delta: 12 })
+
+    expect(res.status).toBe(200)
+    expect(res.body.stock_qty).toBe(15)
+  })
+
+  test('restocking is audited, which is what makes it safe to open up', async () => {
+    const admin = await loginAs(ADMIN.username, ADMIN.password)
+    await admin.patch('/api/menu/1').send({ stock_qty: 3 })
+    const barman = await loginAs('barman', ADMIN.password)
+
+    await barman.post('/api/menu/1/stock').send({ delta: -1 })
+
+    const row = db.prepare(`SELECT * FROM audit_log WHERE action = 'menu.stock'`).get() as any
+    expect(row).toMatchObject({ actor: 'barman', entity_id: '1' })
+    expect(JSON.parse(row.details)).toMatchObject({ delta: -1, from: 3, to: 2 })
+  })
+
+  test('never goes below zero', async () => {
+    const agent = await loginAs(ADMIN.username, ADMIN.password)
+    await agent.patch('/api/menu/1').send({ stock_qty: 1 })
+
+    const res = await agent.post('/api/menu/1/stock').send({ delta: -5 })
+
+    expect(res.body.stock_qty).toBe(0)
+  })
+
+  test('refuses to adjust a drink that is not stock-tracked', async () => {
+    const agent = await loginAs(ADMIN.username, ADMIN.password)
+
+    const res = await agent.post('/api/menu/1/stock').send({ delta: 1 })
+
+    expect(res.status).toBe(400)
+    expect(res.body.error).toMatch(/not stock-tracked/)
+  })
+
+  test('rejects a non-integer or zero delta', async () => {
+    const agent = await loginAs(ADMIN.username, ADMIN.password)
+    await agent.patch('/api/menu/1').send({ stock_qty: 5 })
+
+    expect((await agent.post('/api/menu/1/stock').send({ delta: 0 })).status).toBe(400)
+    expect((await agent.post('/api/menu/1/stock').send({ delta: 1.5 })).status).toBe(400)
+    expect(stockOf(1)).toBe(5)
+  })
+
+  test('404s on an unknown drink', async () => {
+    const agent = await loginAs(ADMIN.username, ADMIN.password)
+
+    expect((await agent.post('/api/menu/99/stock').send({ delta: 1 })).status).toBe(404)
+  })
+
+  test('creating a drink with a stock count tracks it from the start', async () => {
+    const agent = await loginAs(ADMIN.username, ADMIN.password)
+
+    const res = await agent
+      .post('/api/menu')
+      .send({ drink_id: 11, name: 'Џин', price_deni: 20000, points_price: 0, stock_qty: 6 })
+
+    expect(res.body.stock_qty).toBe(6)
+  })
 })
 
 describe('cards and players', () => {
@@ -251,6 +398,39 @@ describe('cards and players', () => {
     expect(res.status).toBe(200)
     expect(res.body.card.card_uid).toBe('9C 76 5A F4')
     expect((await agent.get('/api/unknown-taps')).body).toHaveLength(0)
+  })
+
+  test('a second card for an existing guest records the canonical uid', async () => {
+    // The branch this covers used to insert its own row and forget the canon,
+    // which left the card unauthenticatable at every reader.
+    const { player } = makeCard('AA BB')
+    const agent = await loginAs(ADMIN.username, ADMIN.password)
+
+    const res = await agent.post('/api/cards').send({ cardUid: '9c:76:5a:f4', playerId: player.id })
+
+    expect(res.status).toBe(200)
+    const row = db.prepare('SELECT card_uid_canon AS c FROM cards WHERE id = ?').get(res.body.card.id)
+    expect(row).toEqual({ c: '9C765AF4' })
+  })
+
+  test('a second card is found by the OTHER reader’s spelling — the point of canon', async () => {
+    const { player } = makeCard('AA BB')
+    const agent = await loginAs(ADMIN.username, ADMIN.password)
+    await agent.post('/api/cards').send({ cardUid: '9c:76:5a:f4', playerId: player.id })
+
+    // Registered from Web NFC, looked up as the RC522 terminal reports it.
+    expect(findCardByUid(db, '9C 76 5A F4')).toBeDefined()
+  })
+
+  test('the same physical card cannot be registered twice in two spellings', async () => {
+    const { player } = makeCard('AA BB')
+    const agent = await loginAs(ADMIN.username, ADMIN.password)
+    await agent.post('/api/cards').send({ cardUid: '9C 76 5A F4', playerId: player.id })
+
+    const res = await agent.post('/api/cards').send({ cardUid: '9c:76:5a:f4', playerId: player.id })
+
+    expect(res.status).toBe(400)
+    expect(res.body.error).toMatch(/already registered/)
   })
 
   test('refuses to register a uid twice', async () => {

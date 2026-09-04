@@ -8,6 +8,12 @@ export interface MenuItemRow {
   points_price: number
   available: number
   sort_order: number
+  /** NULL = not stock-tracked. 0 = sold out, which is not orderable. */
+  stock_qty: number | null
+  /** Fiscal VAT band for receipt printing: A=18%, B=5%, V=exempt, G=zero-rated. */
+  vat_type: 'A' | 'B' | 'V' | 'G'
+  /** Whether this drink counts toward turnover from Macedonian producers on the receipt. */
+  is_domestic: number
   updated_at: string
 }
 
@@ -39,6 +45,9 @@ export function getMenuItem(db: Db, drinkId: number): MenuItemRow | undefined {
  *
  * Capped at MAX_MENU_ITEMS because the firmware stops parsing there; sending
  * more would make trailing drinks silently invisible at the terminal.
+ *
+ * A sold-out drink goes out as avail:false rather than as a new wire field —
+ * the firmware already greys those out, so stock costs no protocol change.
  */
 export function wireMenu(db: Db): WireMenuItem[] {
   return listMenu(db)
@@ -48,6 +57,6 @@ export function wireMenu(db: Db): WireMenuItem[] {
       name: row.name,
       price: row.price_deni,
       points_price: row.points_price,
-      avail: row.available === 1
+      avail: row.available === 1 && row.stock_qty !== 0
     }))
 }

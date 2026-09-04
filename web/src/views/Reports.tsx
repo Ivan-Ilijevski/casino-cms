@@ -32,7 +32,7 @@ export function Reports() {
           <div className="k">Нарачки</div>
           <div className="v">{s.orders.total}</div>
           <div className="s">
-            {s.orders.received} нови · {s.orders.fulfilled} подадени · {s.orders.cancelled} откажани
+            {s.orders.received} нови · {s.orders.fulfilled} завршени · {s.orders.cancelled} откажани
           </div>
         </div>
         <div className="stat crimson">

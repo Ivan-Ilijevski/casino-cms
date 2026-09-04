@@ -4,14 +4,14 @@ import { api, mkd, timeAgo, type Order } from '../api'
 const STATUS_MK: Record<Order['status'], string> = {
   received: 'нова',
   accepted: 'прифатена',
-  fulfilled: 'подадена',
+  fulfilled: 'завршена',
   cancelled: 'откажана'
 }
 
 const FILTERS: Array<{ key: string; label: string }> = [
   { key: 'received', label: 'Нови' },
   { key: 'accepted', label: 'Прифатени' },
-  { key: 'fulfilled', label: 'Подадени' },
+  { key: 'fulfilled', label: 'Завршени' },
   { key: '', label: 'Сите' }
 ]
 
@@ -134,7 +134,7 @@ export function Orders({ onCount }: { onCount: (n: number) => void }) {
                       </button>
                     )}
                     <button className="gold" disabled={busy === o.id} onClick={() => act(o.id, 'fulfilled')}>
-                      Подадено
+                      Заврши
                     </button>
                     <button
                       className="danger"
