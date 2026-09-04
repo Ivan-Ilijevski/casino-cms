@@ -2,8 +2,37 @@
 <html lang="mk">
   <head>
     <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <!-- viewport-fit=cover: installed fullscreen there are no system bars, so the
+         page runs under any display cutout. It is what makes env(safe-area-inset-*)
+         non-zero for the padding rules in styles.css. -->
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
     <title>CMS — Шалтер</title>
+
+    <!--
+      PWA install is DISABLED for now.
+
+      Chrome's minted WebAPK carries DEX 039 bytecode, which the Android 8.0 kiosk
+      (API 26, reads to DEX 038) cannot load at all — installing it produced a home
+      screen icon that died on launch with "CMS keeps stopping". Nothing in the
+      manifest can influence that, so the install is withdrawn rather than left as a
+      trap for whoever sets up the next tablet.
+
+      Unlinking the manifest is what withdraws it: no manifest, no install prompt.
+      /manifest.webmanifest, /sw.js and /icons/ are still built and served, because
+      the replacement (a Trusted Web Activity we build ourselves, with a minSdk that
+      yields a loadable DEX) reads the manifest over HTTPS. To re-enable, restore the
+      <link> below and the registration in main.tsx.
+
+      Fullscreen still works meanwhile: Поставки → Влези во цел екран, which uses the
+      Fullscreen API and needs no install. See .claude/plans/android-8-twa-apk.md.
+
+    <link rel="manifest" href="/manifest.webmanifest" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+    <meta name="apple-mobile-web-app-title" content="CMS" />
+    -->
+    <meta name="theme-color" content="#0a0908" />
+    <link rel="apple-touch-icon" href="/icons/apple-touch-icon-180.png" />
     <!--
       Cyrillic coverage is a hard requirement: drink names and player names are
       Macedonian. Unbounded / Golos Text / JetBrains Mono all ship real Cyrillic.

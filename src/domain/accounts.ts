@@ -35,29 +35,43 @@ export function findCardByUid(db: Db, cardUid: string): Card | undefined {
   return db.prepare('SELECT * FROM cards WHERE card_uid_canon = ?').get(canon) as Card | undefined
 }
 
+/**
+ * The ONLY way a card row is created. Every reader — the RC522 terminal and the
+ * POS alike — finds a card through card_uid_canon and nothing else, so a card
+ * inserted without one authenticates nowhere. That is a property of the row, not
+ * of any one caller, which is why there is a single function for it.
+ *
+ * Registration is trusted input: a malformed uid is a mistake worth surfacing,
+ * and a duplicate canon trips the unique index (same card, other spelling).
+ */
+export function addCardToPlayer(db: Db, opts: { playerId: string; cardUid: string }): Card {
+  const cardId = randomUUID()
+  db.prepare('INSERT INTO cards (id, card_uid, player_id, card_uid_canon) VALUES (?, ?, ?, ?)').run(
+    cardId,
+    opts.cardUid,
+    opts.playerId,
+    canonUid(opts.cardUid)
+  )
+  return getCard(db, cardId)!
+}
+
 export function createPlayerWithCard(
   db: Db,
   opts: { name: string; cardUid: string; notes?: string }
 ): { player: Player; card: Card } {
   const playerId = randomUUID()
-  const cardId = randomUUID()
-  // Registration is trusted input: a malformed uid is a mistake worth surfacing,
-  // and a duplicate canon trips the unique index (same card, other spelling).
-  const canon = canonUid(opts.cardUid)
+  // Canonicalise before opening the transaction: a bad uid should throw without
+  // having created a player that now has no card.
+  canonUid(opts.cardUid)
 
-  db.transaction(() => {
+  const card = db.transaction(() => {
     db.prepare('INSERT INTO players (id, name, notes) VALUES (?, ?, ?)').run(
       playerId,
       opts.name,
       opts.notes ?? null
     )
-    db.prepare('INSERT INTO cards (id, card_uid, player_id, card_uid_canon) VALUES (?, ?, ?, ?)').run(
-      cardId,
-      opts.cardUid,
-      playerId,
-      canon
-    )
+    return addCardToPlayer(db, { playerId, cardUid: opts.cardUid })
   })()
 
-  return { player: { id: playerId, name: opts.name }, card: getCard(db, cardId)! }
+  return { player: { id: playerId, name: opts.name }, card }
 }

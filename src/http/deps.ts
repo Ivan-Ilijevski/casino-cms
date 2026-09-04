@@ -26,6 +26,15 @@ export interface StaffDeps {
   config: Config
   events: CmsEvents
   pushes?: Pusher
+  /**
+   * Overrides the 1-in-8 POS PIN spot-check roll. Tests inject a deterministic
+   * one; production leaves it unset and the roll stands.
+   *
+   * Deliberately an injected dependency rather than a request field: the
+   * spot-check is what stops a staff member charging a card they are holding,
+   * so a client able to set it would simply set it off on every sale.
+   */
+  posPinDecision?: () => boolean
 }
 
 /**

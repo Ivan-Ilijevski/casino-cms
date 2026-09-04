@@ -98,6 +98,41 @@ a dead button.
 3. Enable NFC on the tablet. `scan()` also requires a user gesture, hence the
    explicit "Активирај читач" button.
 
+### Fullscreen on the tablet (PWA install is disabled)
+
+Use **Поставки → Влези во цел екран** (the gear beside the role in the side menu). It
+uses the Fullscreen API, so it needs no install and works in a plain Chrome tab: the
+browser UI and the Android status/nav bars go away. The choice is remembered, and since
+a reload always drops fullscreen and the API refuses to re-enter without a gesture, the
+first tap after any reload silently restores it — a kiosk reboot costs one tap.
+
+**Do not use Chrome's "Install app".** It is switched off deliberately: `web/index.html`
+no longer links the manifest, so Chrome offers no install. The WebAPK Chrome mints ships
+**DEX 039** bytecode, introduced in Android 9 (API 28). Our Android 8.0 kiosk is API 26
+and reads to DEX 038, so the dex will not open, every class in it is missing — including
+Chrome's own `SplashContentProvider` — and the icon dies on launch with *"CMS keeps
+stopping"*. The signature in `adb logcat -b crash`:
+
+```
+java.io.IOException: Failed to open dex files from …/base.apk
+  because: Unrecognized version number in …/base.apk: 0 3 9
+```
+
+Nothing in a web manifest can influence an APK's DEX version, so this is not fixable from
+this repo — only withdrawable. `web/src/main.tsx` also *unregisters* any service worker
+left behind rather than merely stopping registration, because a registered worker outlives
+the code that registered it; devices are swept on their next load.
+
+If a tablet still has the crashing icon, it is a real package — remove it with
+`adb uninstall org.chromium.webapk.aff984add835f14e5_v2` (the hash differs per origin;
+`adb shell pm list packages | grep webapk` finds it).
+
+`web/public/manifest.webmanifest`, `web/public/sw.js` and `web/public/icons/` are still
+built and served on purpose. The planned replacement — a Trusted Web Activity we build
+ourselves with `minSdkVersion 21`, giving a loadable DEX 035 — is seeded from that manifest
+over HTTPS. See `.claude/plans/android-8-twa-apk.md`. A normal PWA install still works on
+Android 9+, should you re-enable the `<link>`.
+
 ### Two readers, two spellings of the same card
 
 The RC522 sends `"9C 76 5A F4"` (uppercase, space-separated); Web NFC gives Chrome
@@ -190,6 +225,10 @@ See `.env.example`. Notable:
 - `CMS_TICKET_EXPIRY_DAYS` — empty = never expire, matching the legacy server.
   Tickets print "valid 30 days" but the old server never enforced it; set this to
   start enforcing.
+- `CMS_RECEIPT_API_URL` / `CMS_RECEIPT_API_KEY` — origin and key for the external
+  fiscal receipt-render service the POS calls after a bar payment when
+  "Испринтај фискална" is checked. Unset = `POST /api/pos/receipt` fails closed
+  with 503 rather than silently skipping the print.
 
 ## Not built yet (deliberately)
 

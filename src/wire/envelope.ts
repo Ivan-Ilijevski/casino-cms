@@ -34,6 +34,8 @@ export const ERRORS = {
   unknown_txn: { code: 'unknown_txn', msg: 'Непозната трансакција' },
   conflict: { code: 'conflict', msg: 'Трансакцијата е поништена' },
   empty: { code: 'empty', msg: 'Празна нарачка' },
+  // Reuses the `denied` code the firmware already knows; only the message is new.
+  out_of_stock: { code: 'denied', msg: 'Нема доволно залиха' },
   no_session: { code: 'denied', msg: 'Сесијата е истечена' }
 } as const satisfies Record<string, WireError>
 

@@ -7,7 +7,7 @@ import { wireMenu } from '../domain/menu.js'
 import { placeOrder, type PayMethod } from '../domain/orders.js'
 import { closeSession, getActiveSession, openSession, touchSession, type CloseReason } from '../domain/sessions.js'
 import { ERRORS, failure, reply, type InMessage, type OutMessage } from './envelope.js'
-import { MAX_PLAYER_NAME_BYTES, truncateUtf8 } from './limits.js'
+import { MAX_PLAYER_NAME_BYTES, MAX_TXN_LEN, truncateUtf8 } from './limits.js'
 
 export interface CmsContext {
   db: Db
@@ -39,6 +39,26 @@ function cardForSession(ctx: CmsContext, sid: unknown): string | null {
   if (!session) return null
   touchSession(ctx.db, sid)
   return session.card_id
+}
+
+/**
+ * A usable transfer id, or null.
+ *
+ * Both halves matter. An absent txn used to default to the empty string, which
+ * collapsed every untxned transfer onto one hold — the second answered ok:true
+ * and moved no money. And the firmware copies txn into `char txn[24]`, so
+ * anything longer comes back truncated and would resolve the wrong hold on
+ * commit; better to refuse it than to settle someone else's transfer.
+ */
+function wireTxn(raw: unknown): string | null {
+  if (typeof raw !== 'string') return null
+  const txn = raw.trim()
+  return txn === '' || txn.length > MAX_TXN_LEN ? null : txn
+}
+
+/** The txn as sent, for echoing back on a failure. */
+function echoTxn(raw: unknown): string {
+  return typeof raw === 'string' ? raw : ''
 }
 
 const hello: Handler = (_ctx, msg) => [reply('hello_res', msg.id)]
@@ -77,19 +97,34 @@ const logout: Handler = (ctx, msg) => {
 }
 
 const debit_req: Handler = (ctx, msg) => {
-  const txn = typeof msg.d.txn === 'string' ? msg.d.txn : ''
+  const echo = echoTxn(msg.d.txn)
   const amount = Number(msg.d.amount ?? 0)
 
   const cardId = cardForSession(ctx, msg.d.sid)
-  if (!cardId) return [failure('debit_res', msg.id, ERRORS.no_session, { txn })]
+  if (!cardId) return [failure('debit_res', msg.id, ERRORS.no_session, { txn: echo })]
 
-  const res = placeHold(ctx.db, { cardId, txn, amountDeni: amount })
-  if (!res.ok) return [failure('debit_res', msg.id, ERRORS.insufficient_funds, { txn })]
+  const txn = wireTxn(msg.d.txn)
+  if (!txn) return [failure('debit_res', msg.id, ERRORS.denied, { txn: echo })]
+
+  const res = placeHold(ctx.db, {
+    cardId,
+    txn,
+    amountDeni: amount,
+    sessionId: msg.d.sid as string
+  })
+  if (!res.ok) {
+    // Only say "not enough money" when that is actually why.
+    const error = res.code === 'insufficient' ? ERRORS.insufficient_funds : ERRORS.denied
+    return [failure('debit_res', msg.id, error, { txn })]
+  }
   return [reply('debit_res', msg.id, { txn, balance: res.balanceDeni })]
 }
 
 const debit_commit: Handler = (ctx, msg) => {
-  const txn = typeof msg.d.txn === 'string' ? msg.d.txn : ''
+  const echo = echoTxn(msg.d.txn)
+  const txn = wireTxn(msg.d.txn)
+  if (!txn) return [failure('debit_commit_res', msg.id, ERRORS.unknown_txn, { txn: echo })]
+
   const res = commitHold(ctx.db, { txn, pointsPerMkd: ctx.pointsPerMkd })
 
   if (!res.ok) {
@@ -100,7 +135,10 @@ const debit_commit: Handler = (ctx, msg) => {
 }
 
 const debit_rollback: Handler = (ctx, msg) => {
-  const txn = typeof msg.d.txn === 'string' ? msg.d.txn : ''
+  const echo = echoTxn(msg.d.txn)
+  const txn = wireTxn(msg.d.txn)
+  if (!txn) return [failure('debit_rollback_res', msg.id, ERRORS.unknown_txn, { txn: echo })]
+
   const reason = typeof msg.d.reason === 'string' ? msg.d.reason : undefined
   const res = rollbackHold(ctx.db, { txn, ...(reason ? { reason } : {}) })
 
@@ -109,16 +147,24 @@ const debit_rollback: Handler = (ctx, msg) => {
 }
 
 const credit_req: Handler = (ctx, msg) => {
-  const txn = typeof msg.d.txn === 'string' ? msg.d.txn : ''
+  const echo = echoTxn(msg.d.txn)
   const amount = Number(msg.d.amount ?? 0)
 
   const cardId = cardForSession(ctx, msg.d.sid)
-  if (!cardId) return [failure('credit_res', msg.id, ERRORS.no_session, { txn })]
+  if (!cardId) return [failure('credit_res', msg.id, ERRORS.no_session, { txn: echo })]
+
+  const txn = wireTxn(msg.d.txn)
+  if (!txn) return [failure('credit_res', msg.id, ERRORS.denied, { txn: echo })]
   if (!Number.isInteger(amount) || amount <= 0) {
     return [failure('credit_res', msg.id, ERRORS.denied, { txn })]
   }
 
-  const res = creditCard(ctx.db, { cardId, txn, amountDeni: amount })
+  const res = creditCard(ctx.db, {
+    cardId,
+    txn,
+    amountDeni: amount,
+    sessionId: msg.d.sid as string
+  })
   return [reply('credit_res', msg.id, { txn, balance: res.balanceDeni, points: res.points })]
 }
 
@@ -142,9 +188,11 @@ const order_req: Handler = (ctx, msg) => {
     const error =
       res.code === 'empty'
         ? ERRORS.empty
-        : pay === 'points'
-          ? ERRORS.insufficient_points
-          : ERRORS.insufficient_funds
+        : res.code === 'out_of_stock'
+          ? ERRORS.out_of_stock
+          : pay === 'points'
+            ? ERRORS.insufficient_points
+            : ERRORS.insufficient_funds
     return [failure('order_res', msg.id, error)]
   }
 

@@ -21,6 +21,10 @@ export interface Config {
   /** null = tickets never expire, matching the legacy voucher server. */
   ticketExpiryDays: number | null
   currency: string
+  /** Origin of the external fiscal receipt-render service, e.g. https://your-app.vercel.app. */
+  receiptApiUrl: string
+  /** x-api-key it expects. Empty = receipt printing fails closed (503). */
+  receiptApiKey: string
 }
 
 export const DEFAULT_CONFIG: Config = {
@@ -33,7 +37,9 @@ export const DEFAULT_CONFIG: Config = {
   pointsPerMkd: 1,
   sessionIdleMs: 5 * 60 * 1000,
   ticketExpiryDays: null,
-  currency: 'MKD'
+  currency: 'MKD',
+  receiptApiUrl: '',
+  receiptApiKey: ''
 }
 
 function num(raw: string | undefined, fallback: number): number {
@@ -55,6 +61,8 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     pointsPerMkd: num(env.CMS_POINTS_PER_MKD, DEFAULT_CONFIG.pointsPerMkd),
     sessionIdleMs: num(env.CMS_SESSION_IDLE_MS, DEFAULT_CONFIG.sessionIdleMs),
     ticketExpiryDays: expiry === undefined || expiry.trim() === '' ? null : num(expiry, 0),
-    currency: env.CMS_CURRENCY ?? DEFAULT_CONFIG.currency
+    currency: env.CMS_CURRENCY ?? DEFAULT_CONFIG.currency,
+    receiptApiUrl: env.CMS_RECEIPT_API_URL ?? DEFAULT_CONFIG.receiptApiUrl,
+    receiptApiKey: env.CMS_RECEIPT_API_KEY ?? DEFAULT_CONFIG.receiptApiKey
   }
 }

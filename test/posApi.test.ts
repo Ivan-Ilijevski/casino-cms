@@ -6,7 +6,7 @@ import { seed } from '../src/db/seed.js'
 import { createPlayerWithCard, type Card } from '../src/domain/accounts.js'
 import { balanceOf, postEntry } from '../src/domain/ledger.js'
 import { hashPassword } from '../src/domain/password.js'
-import { setPin } from '../src/domain/pos.js'
+import { getIntent, setPin } from '../src/domain/pos.js'
 import { openSession } from '../src/domain/sessions.js'
 import { CmsEvents } from '../src/events.js'
 import { createStaffApp } from '../src/http/server.js'
@@ -22,6 +22,13 @@ let events: CmsEvents
 let pushes: { pushBalance: ReturnType<typeof vi.fn>; pushLogout: ReturnType<typeof vi.fn> }
 let card: Card
 
+/**
+ * The PIN spot-check is decided server-side and must stay unreachable from the
+ * request body, so tests steer it through the same injection point production
+ * leaves empty rather than through a field a POS client could send.
+ */
+let nextPinDecision: boolean | null = null
+
 beforeEach(() => {
   db = openTestDb()
   seed(db, { adminPassword: PASSWORD })
@@ -35,11 +42,13 @@ beforeEach(() => {
 
   events = new CmsEvents()
   pushes = { pushBalance: vi.fn().mockReturnValue(true), pushLogout: vi.fn().mockReturnValue(true) }
+  nextPinDecision = null
   app = createStaffApp({
     db,
     config: { ...DEFAULT_CONFIG, sessionSecret: 'test-secret' },
     events,
-    pushes
+    pushes,
+    posPinDecision: () => nextPinDecision ?? false
   })
 })
 
@@ -51,7 +60,9 @@ async function loginAs(username: string) {
 }
 
 async function makeIntent(agent: any, body: Record<string, unknown> = {}) {
-  return agent.post('/api/pos/intent').send({ cardUid: NFC_UID, items: CART, pay: 'cash', ...body })
+  const { forcePin, ...rest } = body
+  if (typeof forcePin === 'boolean') nextPinDecision = forcePin
+  return agent.post('/api/pos/intent').send({ cardUid: NFC_UID, items: CART, pay: 'cash', ...rest })
 }
 
 describe('POS access control', () => {
@@ -93,6 +104,33 @@ describe('POST /api/pos/intent', () => {
     expect(balanceOf(db, card.id, 'deni')).toBe(100000)
   })
 
+  test('ignores forcePin in the request body', async () => {
+    // The spot-check is the only thing standing between a staff member and a
+    // card they are holding. A client that could switch it off would switch it
+    // off on every sale, so the body must not reach the decision at all.
+    nextPinDecision = true
+    const agent = await loginAs('barman')
+
+    const res = await agent
+      .post('/api/pos/intent')
+      .send({ cardUid: NFC_UID, items: CART, pay: 'cash', forcePin: false })
+
+    expect(res.status).toBe(200)
+    expect(res.body.pinRequired).toBe(true)
+    expect(getIntent(db, res.body.intentId)!.pin_required).toBe(1)
+  })
+
+  test('a body-supplied forcePin cannot turn the check on either', async () => {
+    nextPinDecision = false
+    const agent = await loginAs('barman')
+
+    const res = await agent
+      .post('/api/pos/intent')
+      .send({ cardUid: NFC_UID, items: CART, pay: 'cash', forcePin: true })
+
+    expect(res.body.pinRequired).toBe(false)
+  })
+
   test('refuses an unknown card', async () => {
     const agent = await loginAs('barman')
 
@@ -118,6 +156,39 @@ describe('POST /api/pos/intent', () => {
 
     expect((await agent.post('/api/pos/confirm').send({})).status).toBe(400)
   })
+
+  test('refuses a cart that outruns the stock, before the card is charged', async () => {
+    db.prepare('UPDATE menu_items SET stock_qty = 1 WHERE drink_id = 1').run()
+    const agent = await loginAs('barman')
+
+    const res = await makeIntent(agent) // CART asks for 2
+
+    expect(res.status).toBe(400)
+    expect(res.body.code).toBe('out_of_stock')
+    expect(balanceOf(db, card.id, 'deni')).toBe(100000)
+  })
+
+  test('a sold-out drink leaves the cart empty rather than short', async () => {
+    db.prepare('UPDATE menu_items SET stock_qty = 0 WHERE drink_id = 1').run()
+    const agent = await loginAs('barman')
+
+    const res = await makeIntent(agent)
+
+    expect(res.body.code).toBe('empty')
+  })
+
+  test('quotes normally when there is enough stock', async () => {
+    db.prepare('UPDATE menu_items SET stock_qty = 5 WHERE drink_id = 1').run()
+    const agent = await loginAs('barman')
+
+    const res = await makeIntent(agent)
+
+    expect(res.body).toMatchObject({ ok: true, totalDeni: 16000 })
+    // Still nothing taken off the shelf: only a confirmed order decrements.
+    expect(
+      (db.prepare('SELECT stock_qty AS s FROM menu_items WHERE drink_id = 1').get() as { s: number }).s
+    ).toBe(5)
+  })
 })
 
 describe('POST /api/pos/confirm', () => {
@@ -130,6 +201,31 @@ describe('POST /api/pos/confirm', () => {
     expect(res.status).toBe(200)
     expect(res.body).toMatchObject({ ok: true, balanceDeni: 84000 })
     expect(balanceOf(db, card.id, 'deni')).toBe(84000)
+  })
+
+  test('a confirmed sale takes the drinks off the shelf', async () => {
+    db.prepare('UPDATE menu_items SET stock_qty = 5 WHERE drink_id = 1').run()
+    const agent = await loginAs('barman')
+    const intent = await makeIntent(agent, { forcePin: false })
+
+    await agent.post('/api/pos/confirm').send({ intentId: intent.body.intentId })
+
+    expect(
+      (db.prepare('SELECT stock_qty AS s FROM menu_items WHERE drink_id = 1').get() as { s: number }).s
+    ).toBe(3)
+  })
+
+  test('stock that ran out between quote and confirm refuses the charge', async () => {
+    db.prepare('UPDATE menu_items SET stock_qty = 5 WHERE drink_id = 1').run()
+    const agent = await loginAs('barman')
+    const intent = await makeIntent(agent, { forcePin: false })
+    // The bar sells the last of it while the guest is finding their card.
+    db.prepare('UPDATE menu_items SET stock_qty = 1 WHERE drink_id = 1').run()
+
+    const res = await agent.post('/api/pos/confirm').send({ intentId: intent.body.intentId })
+
+    expect(res.body.code).toBe('out_of_stock')
+    expect(balanceOf(db, card.id, 'deni')).toBe(100000)
   })
 
   test('the client cannot skip a required PIN by omitting it', async () => {

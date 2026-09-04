@@ -18,6 +18,12 @@
   --crimson: #cf4049;
   --amber: #e08b2c;
 
+  /* The club's print colours, sampled from the logo animation. Used only by the
+     paid screen, which is cream rather than near-black. */
+  --paid-bg: #ecebe1;
+  --paid-ink: #1c1a15;
+  --club-green: #224532;
+
   --ink: #f6f1e4;
   --ink-soft: #b8ada0;
   --ink-mute: #7d7367;
@@ -51,6 +57,9 @@ body {
   font-size: 15px;
   line-height: 1.5;
   -webkit-font-smoothing: antialiased;
+  /* Installed fullscreen, Chrome Android still pull-to-refreshes on overscroll.
+     The POS tablet is in a customer's hands mid-payment when that would fire. */
+  overscroll-behavior-y: contain;
 }
 
 /* Warm pool of light from the top-left, plus grain so the black isn't flat. */
@@ -181,10 +190,33 @@ label {
   height: 100%;
 }
 
+/* Каса hides the rail at every width; doubled class so it still wins inside
+   the mobile block below, where .shell is re-declared. */
+.shell.bare {
+  grid-template-columns: 1fr;
+  grid-template-rows: 1fr;
+}
+
+/* Topbar, burger and scrim exist only below the breakpoint. Keeping them off
+   here (rather than unmounting on resize) means a drawer left open while the
+   window grows simply stops applying. */
+.topbar,
+.scrim {
+  display: none;
+}
+
+/*
+  Safe areas. Installed fullscreen with viewport-fit=cover there is no system bar
+  keeping content off a display cutout, so the elements that sit against a screen
+  edge pad themselves out of it — the pattern .pos-cartbar already uses below.
+  The insets go on those elements rather than on .shell, so the rail and topbar
+  backgrounds still bleed to the physical edge instead of leaving a black gutter.
+  Every env() is 0 on a desktop browser, so none of this costs anything there.
+*/
 .rail {
   border-right: 1px solid var(--line);
   background: linear-gradient(180deg, var(--surface), var(--void));
-  padding: 22px 14px;
+  padding: 22px 14px 22px calc(14px + env(safe-area-inset-left));
   display: flex;
   flex-direction: column;
   gap: 26px;
@@ -217,8 +249,9 @@ label {
   gap: 2px;
 }
 
-.nav button {
+.nav a {
   display: flex;
+  text-decoration: none;
   align-items: center;
   justify-content: space-between;
   gap: 10px;
@@ -233,19 +266,19 @@ label {
   font-size: 14px;
 }
 
-.nav button:hover {
+.nav a:hover {
   background: rgba(246, 241, 228, 0.04);
   color: var(--ink);
 }
 
-.nav button.on {
+.nav a.on {
   background: linear-gradient(90deg, var(--gold-dim), transparent);
   border-left-color: var(--gold);
   color: var(--gold-bright);
   font-weight: 600;
 }
 
-.nav .count {
+.count {
   font-family: var(--mono);
   font-size: 11px;
   font-weight: 700;
@@ -255,6 +288,34 @@ label {
   padding: 1px 7px;
 }
 
+.burger {
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 44px;
+  height: 44px;
+  flex: none;
+  background: transparent;
+  border: 1px solid var(--line);
+  border-radius: var(--r);
+  color: var(--ink);
+}
+
+.burger .count {
+  position: absolute;
+  top: -6px;
+  right: -6px;
+}
+
+.topbar-brand {
+  font-family: var(--display);
+  font-size: 15px;
+  font-weight: 800;
+  letter-spacing: -0.02em;
+  color: var(--gold-bright);
+}
+
 .rail-foot {
   margin-top: auto;
   border-top: 1px solid var(--line-soft);
@@ -262,9 +323,65 @@ label {
   font-size: 12px;
 }
 
+/* Name over role on the left, the settings gear beside them. On a pointer-sized
+   screen it rides quietly with the role line; the negative margin re-centres the
+   32px box on that 16.5px line rather than leaving it hung off the block's bottom
+   edge. The mobile block below grows it to span both lines for thumbs. */
+.rail-foot .who {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 10px;
+}
+
+.rail-foot .who .icon-btn {
+  margin-bottom: -8px;
+}
+
+.rail-foot .name {
+  font-weight: 600;
+}
+
+.rail-foot .role {
+  font-size: 11px;
+}
+
+/* An icon-only target. Defined for the element it is used on — NavLink renders an
+   <a>, which the `button` rules above never reach. */
+.icon-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  flex: none;
+  margin-right: -6px;
+  border-radius: var(--r);
+  color: var(--ink-mute);
+  text-decoration: none;
+  transition: color 0.14s ease, background 0.14s ease;
+}
+
+.icon-btn:hover,
+.icon-btn:focus-visible {
+  color: var(--gold-bright);
+  background: rgba(246, 241, 228, 0.05);
+}
+
+.icon-btn.on {
+  color: var(--gold-bright);
+}
+
 .main {
   overflow-y: auto;
-  padding: 26px 30px 60px;
+  padding: 26px calc(30px + env(safe-area-inset-right)) calc(60px + env(safe-area-inset-bottom))
+    30px;
+}
+
+/* Каса hides the rail at every width, so there main is what meets the left edge. */
+.shell.bare .main {
+  padding-left: calc(30px + env(safe-area-inset-left));
 }
 
 .head {
@@ -304,6 +421,50 @@ label {
   border: 1px solid var(--line-soft);
   border-radius: var(--r);
   padding: 16px;
+}
+
+/* ------------------------------------------------------------- Поставки */
+
+/* One narrow panel; a full-width card would strand the button mid-desk. */
+.settings-card {
+  max-width: 660px;
+}
+
+.settings-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 20px;
+}
+
+.settings-row p {
+  font-size: 13px;
+  margin-top: 4px;
+}
+
+.settings-row button {
+  flex: none;
+  padding: 11px 18px;
+}
+
+.settings-status {
+  margin-top: 16px;
+  padding-top: 14px;
+  border-top: 1px solid var(--line-soft);
+  font-size: 12px;
+}
+
+.settings-status strong {
+  color: var(--ink-soft);
+  font-weight: 600;
+}
+
+/* The rail is off-canvas on a phone, so the button drops under the text. */
+@media (max-width: 560px) {
+  .settings-row {
+    flex-direction: column;
+    align-items: stretch;
+  }
 }
 
 .grid {
@@ -587,7 +748,8 @@ tbody tr:hover {
   height: 100%;
   display: grid;
   place-items: center;
-  padding: 20px;
+  padding: calc(20px + env(safe-area-inset-top)) calc(20px + env(safe-area-inset-right))
+    calc(20px + env(safe-area-inset-bottom)) calc(20px + env(safe-area-inset-left));
 }
 
 .login {
@@ -619,6 +781,36 @@ tbody tr:hover {
 
 .field {
   margin-bottom: 14px;
+}
+
+/* A field whose label shares its line with an action — the card UID and its
+   "scan instead of typing" button. The label keeps its own type; only the row
+   around it is new, so every other .field is untouched. */
+.field-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.field-head label {
+  margin-bottom: 6px;
+}
+
+.scan-btn {
+  flex: none;
+  padding: 3px 10px;
+  font-size: 11px;
+  border-color: rgba(212, 175, 55, 0.35);
+  color: var(--gold-bright);
+}
+
+/* Armed: the same pulse the contactless mark uses at the till, so "waiting for
+   a card" looks the same wherever the tablet is asking for one. */
+.scan-btn.armed {
+  color: var(--gold-bright);
+  border-color: var(--gold);
+  animation: contactless-pulse 1.6s ease-in-out infinite;
 }
 
 /* ---------------------------------------------------------------- misc */
@@ -699,7 +891,9 @@ tbody tr:hover {
 
 .split {
   display: grid;
-  grid-template-columns: 1fr 340px;
+  /* minmax(0, …) rather than 1fr: a bare 1fr track has an `auto` minimum, so a
+     wide child (a POS order row) could force the grid past the viewport. */
+  grid-template-columns: minmax(0, 1fr) 340px;
   gap: 16px;
   align-items: start;
 }
@@ -707,13 +901,74 @@ tbody tr:hover {
 @media (max-width: 900px) {
   .shell {
     grid-template-columns: 1fr;
+    grid-template-rows: auto 1fr;
   }
-  .rail {
-    border-right: none;
+  .topbar {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: calc(8px + env(safe-area-inset-top)) calc(12px + env(safe-area-inset-right)) 8px
+      calc(12px + env(safe-area-inset-left));
     border-bottom: 1px solid var(--line);
+    background: var(--surface);
+  }
+  /* The rail is off-canvas here, so main meets the left edge on its own. */
+  .main {
+    padding-left: calc(30px + env(safe-area-inset-left));
+  }
+  /* Off-canvas: fixed, so it leaves the grid and main starts at the top. */
+  .rail {
+    position: fixed;
+    inset: 0 auto 0 0;
+    z-index: 40;
+    width: 232px;
+    padding-top: calc(22px + env(safe-area-inset-top));
+    padding-bottom: calc(22px + env(safe-area-inset-bottom));
+    transform: translateX(-100%);
+    transition: transform 0.18s ease;
+  }
+  .rail.open {
+    transform: none;
+  }
+  /* The drawer is driven by thumbs, so the gear grows to the combined height of
+     the name and role lines (18px + 16.5px) and centres against both. */
+  .rail-foot .who {
+    align-items: center;
+  }
+  .rail-foot .who .icon-btn {
+    width: 34px;
+    height: 34px;
+    margin-bottom: 0;
+  }
+  .rail-foot .who .icon-btn svg {
+    width: 24px;
+    height: 24px;
+  }
+  .scrim {
+    display: block;
+    position: fixed;
+    inset: 0;
+    z-index: 30;
+    background: rgba(10, 9, 8, 0.62);
   }
   .split {
-    grid-template-columns: 1fr;
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .rail {
+    transition: none;
+  }
+  /* rise, flare, pulse, sonar and the dossier stagger all ran regardless. */
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.001ms !important;
+    animation-iteration-count: 1 !important;
+    animation-delay: 0ms !important;
+    transition-duration: 0.001ms !important;
+    scroll-behavior: auto !important;
   }
 }
 
@@ -738,9 +993,135 @@ h3 {
   display: grid;
   gap: 10px;
   grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
+  /* Equal rows too: a two-line name must not make its row taller than the
+     others, or the grid appears to shuffle as drinks are added. */
+  grid-auto-rows: 1fr;
   align-content: start;
 }
 
+/* Phone cart: pinned to the bottom so the total and Наплати are always in
+   reach. The tiles get room underneath so the last row never hides behind it. */
+.pos-cartbar {
+  position: fixed;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  z-index: var(--z-scrim);
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 14px;
+  padding-bottom: calc(10px + env(safe-area-inset-bottom));
+  background: var(--surface);
+  border-top: 1px solid var(--line);
+  box-shadow: 0 -12px 32px rgba(10, 9, 8, 0.6);
+}
+
+.pos-cartbar .summary {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 2px;
+  padding: 4px 0;
+  background: transparent;
+  border: none;
+}
+
+.pos-cartbar .count-line {
+  font-size: 11px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--ink-mute);
+}
+
+.pos-cartbar .total {
+  font-size: 21px;
+}
+
+.pos-cartbar .gold {
+  padding: 13px 24px;
+  font-size: 15px;
+}
+
+.pos-tiles.has-cartbar {
+  padding-bottom: 92px;
+}
+
+/* An order row's natural width (name + −/+ + line total) beats the 340px cart
+   column, and a flex child cannot shrink below min-content unless told to — so
+   the panel used to push past the right edge of the screen, taking the line
+   totals with it. The name is the only part allowed to give. */
+.pos-cart-row {
+  justify-content: space-between;
+}
+
+.pos-cart-row .name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  text-align: left;
+  font-weight: 600;
+}
+
+.pos-cart-row .controls {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: none;
+}
+
+/*
+  In the modal the row becomes two: the name on its own line, in full, and the
+  quantity and the line total beneath it. The 340px side column cannot afford
+  the height, so it keeps one line with an ellipsis.
+*/
+.dialog .pos-cart-row {
+  flex-direction: column;
+  align-items: stretch;
+  gap: 8px;
+}
+
+.dialog .pos-cart-row .name {
+  width: 100%;
+  flex: none;
+  overflow: visible;
+  text-overflow: clip;
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+
+.dialog .pos-cart-row .controls {
+  justify-content: space-between;
+}
+
+.pos-cart-row button {
+  flex: none;
+}
+
+.pos-cart-row .qty {
+  flex: none;
+  min-width: 22px;
+  text-align: center;
+}
+
+.pos-cart-row .line-total {
+  flex: none;
+  min-width: 68px;
+  text-align: right;
+}
+
+/*
+  A tile's box must depend on NOTHING but its grid track — not on the length of
+  the drink's name, and not on whether it is selected. Both used to leak in:
+  a grid item's `min-width: auto` lets it lay out at its own min-content width,
+  so "Енергетски пијалок" rendered wider than the track it sat in and shoved its
+  neighbour aside. `overflow: hidden` is what neutralises that automatic minimum
+  (the rule only applies while overflow is visible) — it is load-bearing, not
+  decoration. min-width: 0 says the same thing to any flex parent.
+*/
 .tile {
   position: relative;
   display: flex;
@@ -748,23 +1129,57 @@ h3 {
   align-items: flex-start;
   gap: 6px;
   min-height: 84px;
+  min-width: 0;
   padding: 14px;
+  /* Room for the qty badge (22px at right: 8px) so a long name never runs
+     underneath the number. Reserved always, so nothing moves when it appears. */
+  padding-right: 34px;
   background: var(--surface);
   border: 1px solid var(--line-soft);
   text-align: left;
+  overflow: hidden;
 }
 
-.tile:hover {
-  border-color: rgba(212, 175, 55, 0.45);
+/* Touch devices keep :hover on the last-tapped element, which left one tile
+   looking permanently picked. Only real pointers get the hover accent. */
+@media (hover: hover) {
+  .tile:hover {
+    border-color: rgba(212, 175, 55, 0.45);
+  }
 }
 
+/* In the cart, and saying so in colour alone — no border width, no outer ring,
+   nothing that changes the space the tile occupies. */
+.tile.picked {
+  border-color: var(--gold);
+  background: var(--surface-2);
+}
+
+/* Names are truncated rather than wrapped: rows stay one height, and the price
+   underneath never gets pushed out of the box. */
 .tile-name {
+  width: 100%;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
   font-size: 15px;
   font-weight: 600;
 }
 
 .tile-price {
+  width: 100%;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
   font-size: 12px;
+  color: var(--ink-mute);
+}
+
+.tile-stock {
+  font-family: var(--mono);
+  font-size: 11px;
   color: var(--ink-mute);
 }
 
@@ -787,10 +1202,13 @@ h3 {
 /* Customer-facing screens take the whole viewport — no nav, no distractions. */
 .pos-screen {
   min-height: calc(100vh - 90px);
+  min-height: calc(100dvh - 90px);
   display: grid;
   place-items: center;
-  padding: 20px;
+  padding: 20px calc(20px + env(safe-area-inset-right)) calc(20px + env(safe-area-inset-bottom))
+    calc(20px + env(safe-area-inset-left));
   text-align: center;
+  overflow-y: auto;
 }
 
 .pos-amount {
@@ -812,56 +1230,26 @@ h3 {
   animation: rise 0.3s cubic-bezier(0.2, 0.9, 0.3, 1) both;
 }
 
-/* The tap target reads as "present card here" from arm's length. */
-.nfc-target {
-  position: relative;
-  width: 168px;
-  height: 168px;
-  margin: 26px auto;
-  display: grid;
-  place-items: center;
+/* Contactless logo — idle vs scanning */
+.contactless-logo {
+  width: 160px;
+  height: 160px;
+  margin: 30px auto;
+  display: block;
+  opacity: 0.35;
+  filter: grayscale(1);
+  transition: opacity 0.3s ease, filter 0.3s ease;
 }
 
-.nfc-ring {
-  position: absolute;
-  inset: 0;
-  border: 2px solid var(--line);
-  border-radius: 50%;
+.contactless-logo.scanning {
+  opacity: 1;
+  filter: grayscale(0) drop-shadow(0 0 12px var(--gold)) drop-shadow(0 0 24px rgba(212, 175, 55, 0.4));
+  animation: contactless-pulse 1.6s ease-in-out infinite;
 }
 
-.nfc-ring.d2 {
-  inset: 26px;
-  border-color: var(--line-soft);
-}
-
-.nfc-target.live .nfc-ring {
-  border-color: rgba(212, 175, 55, 0.55);
-  animation: sonar 1.9s ease-out infinite;
-}
-
-.nfc-target.live .nfc-ring.d2 {
-  animation: sonar 1.9s ease-out infinite 0.55s;
-}
-
-@keyframes sonar {
-  0% {
-    transform: scale(0.82);
-    opacity: 0.9;
-  }
-  100% {
-    transform: scale(1.16);
-    opacity: 0;
-  }
-}
-
-.nfc-wave {
-  font-size: 40px;
-  color: var(--ink-mute);
-  transform: rotate(-90deg);
-}
-
-.nfc-target.live .nfc-wave {
-  color: var(--gold-bright);
+@keyframes contactless-pulse {
+  0%, 100% { transform: scale(1); opacity: 1; }
+  50% { transform: scale(1.08); opacity: 0.85; }
 }
 
 .pin-dots {
@@ -905,6 +1293,56 @@ h3 {
   margin-bottom: 10px;
 }
 
+/*
+  The two screens a GUEST looks at — tap-to-pay and paid — run on cream rather
+  than the house near-black. The club's animation and logo are authored on that
+  ground, so anything else would frame a bright rectangle in a dark room. The
+  type flips to the brand's own dark green and near-black to suit it. Fixed
+  rather than inset so no dark gutter shows around the edges.
+*/
+.pos-screen.light {
+  position: fixed;
+  inset: 0;
+  z-index: var(--z-modal);
+  background: var(--paid-bg);
+  color: var(--paid-ink);
+}
+
+.pos-screen.light h2 {
+  color: var(--club-green);
+}
+
+.pos-screen.light .pos-amount {
+  color: var(--paid-ink);
+}
+
+.pos-screen.light .pos-amount.credit {
+  color: var(--club-green);
+}
+
+.pos-screen.light .muted {
+  color: rgba(28, 26, 21, 0.55);
+}
+
+/* A ghost button is cream-coloured text — invisible here without this. */
+.pos-screen.light button.ghost {
+  color: var(--paid-ink);
+  border-color: rgba(28, 26, 21, 0.18);
+}
+
+.pos-screen.light button.ghost:hover:not(:disabled) {
+  background: rgba(28, 26, 21, 0.06);
+  border-color: rgba(28, 26, 21, 0.3);
+}
+
+/* No frame: the animation's own background and the screen's are one colour. */
+.pos-success-clip {
+  display: block;
+  width: min(280px, 62vw);
+  height: auto;
+  margin: 0 auto 4px;
+}
+
 .pos-result.ok .pos-tick {
   color: var(--emerald);
 }
@@ -924,4 +1362,1407 @@ h3 {
   font-size: 20px;
   letter-spacing: -0.02em;
   margin: 6px 0;
+}
+
+/* Mode tabs: pill-row toggle for Bar / Наплата */
+.pos-mode-tabs {
+  display: flex;
+  gap: 2px;
+  background: var(--surface);
+  border-radius: var(--r);
+  padding: 3px;
+  border: 1px solid var(--line-soft);
+  margin-bottom: 16px;
+  max-width: 300px;
+}
+
+.pos-mode-tabs button {
+  flex: 1;
+  padding: 10px 20px;
+  font-size: 14px;
+  font-weight: 600;
+  border: none;
+  border-radius: var(--r);
+  color: var(--ink-mute);
+  background: transparent;
+  transition: background 0.14s ease, color 0.14s ease;
+}
+
+.pos-mode-tabs button.active {
+  background: var(--surface-3);
+  color: var(--gold-bright);
+}
+
+/* Fullscreen wrapper for custom-charge mode */
+.pos-charge-full {
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.pos-charge-full .head {
+  margin-bottom: 8px;
+}
+
+.pos-charge-full .pos-mode-tabs {
+  margin-bottom: 8px;
+}
+
+/* Custom charge panel */
+.pos-custom {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 0;
+  flex: 1;
+  min-height: 0;
+}
+
+.pos-amount-display {
+  font-size: 32px;
+  font-family: var(--mono);
+  font-weight: 700;
+  text-align: center;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  color: var(--gold-bright);
+  padding: 12px;
+  border-radius: var(--r);
+  letter-spacing: -0.02em;
+}
+
+.pos-keypad {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 6px;
+  flex: 1;
+  min-height: 0;
+}
+
+.pos-keypad button {
+  font-family: var(--mono);
+  font-size: 22px;
+  font-weight: 600;
+  padding: 0;
+  height: 100%;
+}
+
+.pos-custom-dir,
+.pos-custom-labels {
+  display: flex;
+  gap: 2px;
+  background: var(--surface);
+  border-radius: var(--r);
+  padding: 3px;
+  border: 1px solid var(--line-soft);
+}
+
+.pos-custom-dir button,
+.pos-custom-labels button {
+  flex: 1;
+  padding: 9px 16px;
+  font-size: 13px;
+  font-weight: 600;
+  border: none;
+  border-radius: var(--r);
+  color: var(--ink-mute);
+  background: transparent;
+  transition: background 0.14s ease, color 0.14s ease;
+}
+
+.pos-custom-dir button.active,
+.pos-custom-labels button.active {
+  background: var(--surface-3);
+  color: var(--ink);
+}
+
+
+.pos-amount.credit {
+  color: var(--emerald);
+}
+
+/* Small phones — tighten everything so nothing overflows */
+@media (max-width: 480px) {
+  .pos-screen {
+    padding: 14px calc(12px + env(safe-area-inset-right)) calc(14px + env(safe-area-inset-bottom))
+      calc(12px + env(safe-area-inset-left));
+    min-height: calc(100vh - 60px);
+    min-height: calc(100dvh - 60px);
+  }
+
+  .pos-amount.big {
+    font-size: 34px;
+  }
+
+  .pos-amount {
+    font-size: 24px;
+  }
+
+  .contactless-logo {
+    width: 118px;
+    height: 118px;
+    margin: 18px auto;
+  }
+
+  .pinpad button {
+    font-size: 18px;
+    padding: 12px 0;
+  }
+
+  .pinpad {
+    gap: 6px;
+  }
+
+  .pos-pin-head h2 {
+    font-size: 17px;
+  }
+
+  .pos-result h2 {
+    font-size: 20px;
+  }
+
+  .pos-tick {
+    font-size: 42px;
+  }
+
+  .big-btn {
+    font-size: 15px;
+    padding: 12px 18px;
+  }
+
+  .tile {
+    min-height: 64px;
+    padding: 10px;
+    /* Keeps the badge's corner reserved — the shorthand above would drop it. */
+    padding-right: 30px;
+    gap: 4px;
+  }
+
+  .tile-name {
+    font-size: 13px;
+  }
+
+  .tile-price {
+    font-size: 11px;
+  }
+
+  .pos-tiles {
+    grid-template-columns: repeat(auto-fill, minmax(110px, 1fr));
+    gap: 6px;
+  }
+
+  .pos-amount-display {
+    font-size: 24px;
+    padding: 10px;
+  }
+
+  .pos-keypad button {
+    font-size: 18px;
+  }
+
+  .pos-keypad {
+    gap: 4px;
+  }
+
+  .pos-charge-full .head {
+    margin-bottom: 4px;
+  }
+
+  .pos-charge-full .pos-mode-tabs {
+    margin-bottom: 4px;
+  }
+
+  .head {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 10px;
+    margin-bottom: 14px;
+    padding-bottom: 10px;
+  }
+
+  .head h2 {
+    font-size: 20px;
+  }
+
+  .pos-mode-tabs {
+    max-width: 100%;
+  }
+
+  .pos-mode-tabs button {
+    padding: 8px 14px;
+  }
+}
+
+/* Touch feedback for tiles on Android. The ring is INSET: an outer box-shadow
+   paints 2px beyond the border box, so the tile grew under your finger. */
+.tile:active:not(:disabled) {
+  border-color: var(--gold);
+  box-shadow: inset 0 0 0 2px var(--gold-dim);
+}
+
+/* ==========================================================================
+   Гости — the CRM
+   --------------------------------------------------------------------------
+   A guest page is a case file: a monogram struck in gold, the name in the
+   display face, a mono identity line, then dividers. Same near-black surfaces
+   and single gold accent as the rest of the desk — nothing new is introduced
+   here that the operations aesthetic did not already establish.
+   ========================================================================== */
+
+:root {
+  /* The original sheet had no scale at all; new work uses these. */
+  --s1: 4px;
+  --s2: 8px;
+  --s3: 12px;
+  --s4: 16px;
+  --s5: 22px;
+  --s6: 32px;
+
+  --r-lg: 8px;
+
+  --shadow-1: 0 2px 10px -4px rgba(0, 0, 0, 0.7);
+  --shadow-2: 0 30px 80px -20px rgba(0, 0, 0, 0.9);
+
+  --z-scrim: 30;
+  --z-modal: 60;
+
+  --violet: #9b8ede; /* was hardcoded on .tag.points */
+  --ink-faint: rgba(246, 241, 228, 0.04);
+}
+
+/* ---------- primitives the system was missing ---------- */
+
+.pill {
+  border-radius: 999px;
+  padding: 5px 13px;
+  font-size: 12px;
+}
+
+.pill.on {
+  background: var(--gold-dim);
+  border-color: rgba(212, 175, 55, 0.45);
+  color: var(--gold-bright);
+}
+
+/* Base `input, select` are width:100% for forms; in a toolbar they must not
+   stretch across the header. */
+.toolbar input,
+.toolbar select {
+  width: auto;
+}
+
+.search {
+  min-width: 260px;
+}
+
+button.solid.danger {
+  background: var(--crimson);
+  border-color: var(--crimson);
+  color: #fff;
+}
+
+button.solid.danger:hover {
+  background: #e04b55;
+  border-color: #e04b55;
+  color: #fff;
+}
+
+.ghost-link {
+  color: var(--ink-soft);
+  font-size: 12px;
+  text-decoration: none;
+  border-bottom: 1px solid var(--line);
+}
+
+.ghost-link:hover {
+  color: var(--gold-bright);
+}
+
+.back {
+  display: inline-block;
+  margin-bottom: var(--s3);
+  color: var(--ink-mute);
+  font-size: 12px;
+  text-decoration: none;
+}
+
+.back:hover {
+  color: var(--gold-bright);
+}
+
+.card-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--s3);
+  margin-bottom: var(--s3);
+}
+
+.card-head h3 {
+  margin-bottom: 0;
+}
+
+.hint {
+  font-size: 11px;
+  color: var(--ink-mute);
+  margin-top: 5px;
+}
+
+.hint.over {
+  color: #ff9098;
+}
+
+.crimson {
+  color: var(--crimson);
+}
+
+.gold {
+  color: var(--gold-bright);
+}
+
+textarea {
+  width: 100%;
+  background: var(--void);
+  border: 1px solid var(--line-soft);
+  border-radius: var(--r);
+  padding: 10px 11px;
+  color: var(--ink);
+  font-family: var(--body);
+  font-size: 14px;
+  resize: vertical;
+}
+
+textarea:focus {
+  outline: none;
+  border-color: var(--gold);
+  box-shadow: 0 0 0 3px var(--gold-dim);
+}
+
+/* Segmented control — one control, mutually exclusive choices. */
+.seg {
+  display: inline-flex;
+  border: 1px solid var(--line);
+  border-radius: var(--r);
+  overflow: hidden;
+  margin-bottom: var(--s3);
+}
+
+.seg button {
+  border: none;
+  border-radius: 0;
+  background: transparent;
+  border-right: 1px solid var(--line);
+  font-size: 12px;
+}
+
+.seg button:last-child {
+  border-right: none;
+}
+
+.seg button.on {
+  background: var(--gold-dim);
+  color: var(--gold-bright);
+}
+
+.inline-field {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--s2);
+  font-size: 11px;
+  letter-spacing: 0.09em;
+  text-transform: uppercase;
+  color: var(--ink-mute);
+}
+
+.inline-field input {
+  width: auto;
+  font-size: 12px;
+  padding: 5px 8px;
+}
+
+/* ---------- monogram ---------- */
+
+.monogram {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: none;
+  width: 30px;
+  height: 30px;
+  border-radius: var(--r);
+  font-family: var(--display);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0;
+  color: var(--gold-bright);
+  background: linear-gradient(
+    160deg,
+    hsl(var(--hue, 40) 30% 16%),
+    hsl(var(--hue, 40) 20% 9%)
+  );
+  border: 1px solid var(--line);
+}
+
+.monogram.big {
+  width: 62px;
+  height: 62px;
+  font-size: 21px;
+  border-radius: var(--r-lg);
+  box-shadow: var(--shadow-1);
+}
+
+/* ---------- chips ---------- */
+
+.chips {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+}
+
+.chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  padding: 2px 8px;
+  color: var(--ink-soft);
+}
+
+.chip.vip {
+  color: var(--gold-bright);
+  border-color: rgba(212, 175, 55, 0.5);
+  background: var(--gold-dim);
+}
+
+.chip.watch {
+  color: var(--amber);
+  border-color: rgba(224, 139, 44, 0.45);
+}
+
+.chip.excluded {
+  color: var(--crimson);
+  border-color: rgba(207, 64, 73, 0.5);
+  background: rgba(207, 64, 73, 0.1);
+}
+
+.chip.pep {
+  color: var(--violet);
+  border-color: rgba(155, 142, 222, 0.45);
+}
+
+.chip-x {
+  border: none;
+  background: transparent;
+  padding: 0 0 0 2px;
+  font-size: 10px;
+  color: inherit;
+  opacity: 0.6;
+}
+
+.chip-x:hover {
+  background: transparent;
+  opacity: 1;
+}
+
+.chip-add {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 3px 9px 3px 7px;
+  font-size: 11px;
+}
+
+/* ---------- guest list ---------- */
+
+.guest-cell {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  color: inherit;
+  text-decoration: none;
+}
+
+.guest-name {
+  display: block;
+  font-weight: 600;
+}
+
+.guest-sub {
+  display: block;
+  font-size: 11px;
+}
+
+.guest-cell:hover .guest-name {
+  color: var(--gold-bright);
+}
+
+.rows tbody tr {
+  animation: rise 0.32s cubic-bezier(0.2, 0.9, 0.3, 1) backwards;
+  animation-delay: calc(var(--i, 0) * 18ms);
+}
+
+.tap-inbox {
+  border-color: rgba(224, 139, 44, 0.3);
+  margin-bottom: var(--s4);
+}
+
+.taps {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-top: var(--s3);
+}
+
+.tap {
+  display: grid;
+  grid-template-columns: auto auto 1fr auto auto;
+  align-items: center;
+  gap: var(--s2);
+  padding: 7px 10px;
+  border: 1px solid var(--line-soft);
+  border-radius: var(--r);
+  font-size: 13px;
+}
+
+.taps.compact {
+  flex-direction: row;
+  flex-wrap: wrap;
+}
+
+.taps.compact button.on {
+  border-color: var(--gold);
+  color: var(--gold-bright);
+}
+
+.picker {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  max-height: 190px;
+  overflow-y: auto;
+  margin-top: 6px;
+}
+
+.picker button {
+  display: flex;
+  align-items: center;
+  gap: var(--s2);
+  width: 100%;
+  text-align: left;
+  font-weight: 400;
+}
+
+.picker button.on {
+  border-color: var(--gold);
+  color: var(--gold-bright);
+}
+
+/* ---------- the dossier header ---------- */
+
+.risk-banner {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  border: 1px solid rgba(207, 64, 73, 0.5);
+  border-left: 3px solid var(--crimson);
+  background: rgba(207, 64, 73, 0.1);
+  border-radius: var(--r);
+  padding: 11px 14px;
+  margin-bottom: var(--s4);
+  font-size: 13px;
+}
+
+.risk-banner strong {
+  font-family: var(--display);
+  font-size: 12px;
+  letter-spacing: 0.06em;
+  color: #ff9098;
+}
+
+.dossier {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: var(--s4);
+  align-items: start;
+  padding-bottom: var(--s5);
+  border-bottom: 1px solid var(--line);
+  margin-bottom: var(--s4);
+}
+
+.dossier-id h2 {
+  font-family: var(--display);
+  font-size: 28px;
+  font-weight: 600;
+  letter-spacing: -0.035em;
+  line-height: 1.15;
+}
+
+.dossier-meta {
+  font-size: 11px;
+  letter-spacing: 0.04em;
+  color: var(--ink-mute);
+  margin: 5px 0 10px;
+}
+
+.kpis {
+  grid-column: 1 / -1;
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(170px, 1fr));
+  gap: var(--s3);
+}
+
+.kpis .stat {
+  animation: rise 0.4s cubic-bezier(0.2, 0.9, 0.3, 1) backwards;
+  animation-delay: calc(var(--i, 0) * 55ms);
+}
+
+.kpis .stat .v {
+  font-size: 22px;
+}
+
+/* ---------- tabs, as file dividers ---------- */
+
+.tabs {
+  display: flex;
+  gap: 2px;
+  overflow-x: auto;
+  border-bottom: 1px solid var(--line);
+  margin-bottom: var(--s4);
+  scrollbar-width: none;
+}
+
+.tabs::-webkit-scrollbar {
+  display: none;
+}
+
+.tab {
+  flex: none;
+  padding: 9px 15px;
+  border: 1px solid transparent;
+  border-bottom: none;
+  border-radius: var(--r) var(--r) 0 0;
+  margin-bottom: -1px;
+  color: var(--ink-soft);
+  font-size: 13px;
+  text-decoration: none;
+  white-space: nowrap;
+}
+
+.tab:hover {
+  color: var(--ink);
+  background: var(--ink-faint);
+}
+
+.tab.on {
+  background: var(--surface);
+  border-color: var(--line);
+  border-bottom: 1px solid var(--surface);
+  color: var(--gold-bright);
+  font-weight: 600;
+}
+
+/* ---------- definition lists ---------- */
+
+.dl {
+  display: flex;
+  flex-direction: column;
+}
+
+.dl-row {
+  display: grid;
+  grid-template-columns: 150px 1fr;
+  gap: var(--s3);
+  padding: 8px 0;
+  border-bottom: 1px solid var(--line-soft);
+}
+
+.dl.tight .dl-row {
+  grid-template-columns: 130px 1fr;
+  padding: 5px 0;
+  font-size: 13px;
+}
+
+.dl-row:last-child {
+  border-bottom: none;
+}
+
+.dl-k {
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.09em;
+  text-transform: uppercase;
+  color: var(--ink-mute);
+  padding-top: 2px;
+}
+
+.dl-v {
+  font-size: 14px;
+}
+
+/* ---------- money timeline ---------- */
+
+.money-bar {
+  align-items: center;
+  margin-bottom: var(--s3);
+}
+
+.money-bar .seg {
+  margin-bottom: 0;
+}
+
+.timeline {
+  list-style: none;
+  position: relative;
+  padding-left: var(--s5);
+}
+
+/* The gold spine. */
+.timeline::before {
+  content: '';
+  position: absolute;
+  left: 5px;
+  top: 6px;
+  bottom: 6px;
+  width: 1px;
+  background: linear-gradient(180deg, var(--gold-dim), transparent);
+}
+
+.tl-item {
+  position: relative;
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: var(--s3);
+  padding: 11px 0;
+  border-bottom: 1px solid var(--line-soft);
+  animation: rise 0.34s cubic-bezier(0.2, 0.9, 0.3, 1) backwards;
+  animation-delay: calc(var(--i, 0) * 24ms);
+}
+
+.tl-item:last-child {
+  border-bottom: none;
+}
+
+.tl-dot {
+  position: absolute;
+  left: calc(var(--s5) * -1 + 2px);
+  top: 16px;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--ink-mute);
+  box-shadow: 0 0 0 3px var(--surface);
+}
+
+.tl-dot.k-aft_debit,
+.tl-dot.k-order {
+  background: var(--gold);
+}
+
+.tl-dot.k-aft_credit,
+.tl-dot.k-order_refund,
+.tl-dot.k-aft_rollback {
+  background: var(--emerald);
+}
+
+.tl-dot.k-adjustment {
+  background: var(--amber);
+}
+
+.tl-dot.k-points_earned {
+  background: var(--violet);
+}
+
+.tl-top {
+  display: flex;
+  align-items: baseline;
+  gap: var(--s2);
+}
+
+.tl-kind {
+  font-weight: 600;
+  font-size: 14px;
+}
+
+.tl-ref {
+  font-size: 11px;
+  color: var(--gold);
+}
+
+.tl-desc {
+  font-size: 12px;
+  margin-top: 2px;
+}
+
+.tl-meta {
+  font-size: 11px;
+  margin-top: 3px;
+}
+
+.tl-amount {
+  align-self: center;
+  font-size: 15px;
+  white-space: nowrap;
+}
+
+.tl-amount.neg {
+  color: var(--crimson);
+}
+
+.tl-amount.pos {
+  color: var(--emerald);
+}
+
+.more {
+  display: flex;
+  justify-content: center;
+  padding-top: var(--s4);
+}
+
+/* ---------- card faces ---------- */
+
+.cardface {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s3);
+  border-left: 3px solid var(--gold);
+}
+
+.cardface.blocked {
+  border-left-color: var(--crimson);
+  opacity: 0.72;
+}
+
+.cardface-top {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--s2);
+  flex-wrap: wrap;
+}
+
+.cardface-uid {
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--gold-bright);
+}
+
+.cardface-money {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: var(--s3);
+  padding: var(--s3) 0;
+  border-top: 1px dashed var(--line);
+  border-bottom: 1px dashed var(--line);
+}
+
+.cardface-money .k {
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.11em;
+  text-transform: uppercase;
+  color: var(--ink-mute);
+}
+
+.cardface-money .v {
+  font-family: var(--mono);
+  font-size: 19px;
+  font-weight: 700;
+  letter-spacing: -0.03em;
+  margin-top: 3px;
+}
+
+.cardface-acts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: auto;
+}
+
+/* Card status stops borrowing the order-status palette. */
+.tag.active {
+  color: var(--emerald);
+  border-color: rgba(58, 160, 111, 0.4);
+}
+
+.tag.nopin {
+  color: var(--amber);
+  border-color: rgba(224, 139, 44, 0.4);
+}
+
+.tag.locked {
+  color: var(--crimson);
+  border-color: rgba(207, 64, 73, 0.45);
+}
+
+.tag.maybe {
+  color: var(--ink-mute);
+  border-style: dashed;
+}
+
+/* ---------- notes ---------- */
+
+.note-body {
+  white-space: pre-wrap;
+  font-size: 14px;
+}
+
+.note.pinned {
+  border-left: 3px solid var(--gold);
+}
+
+.note-foot {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--s3);
+  margin-top: var(--s3);
+  flex-wrap: wrap;
+}
+
+.note-meta {
+  font-size: 11px;
+}
+
+.card.note {
+  animation: rise 0.32s cubic-bezier(0.2, 0.9, 0.3, 1) backwards;
+  animation-delay: calc(var(--i, 0) * 30ms);
+}
+
+/* ---------- dialog: the first modal in the system ---------- */
+
+.dialog {
+  width: min(460px, calc(100vw - 32px));
+  max-height: calc(100vh - 64px);
+  /* The sheet's universal `* { margin: 0 }` reset kills the margin:auto that
+     centres a <dialog> in its top layer, so it has to come back explicitly. */
+  margin: auto;
+  padding: 0;
+  background: var(--surface);
+  color: var(--ink);
+  border: 1px solid var(--line);
+  border-radius: var(--r-lg);
+  box-shadow: var(--shadow-2);
+  z-index: var(--z-modal);
+  animation: rise 0.22s cubic-bezier(0.2, 0.9, 0.3, 1);
+}
+
+.dialog.wide {
+  width: min(720px, calc(100vw - 32px));
+}
+
+.dialog::backdrop {
+  background: rgba(10, 9, 8, 0.72);
+  backdrop-filter: blur(2px);
+}
+
+.dialog form {
+  display: flex;
+  flex-direction: column;
+  max-height: calc(100vh - 66px);
+}
+
+.dialog-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: var(--s3);
+  padding: var(--s4) var(--s5);
+  border-bottom: 1px solid var(--line);
+}
+
+.dialog-head h3 {
+  margin-bottom: 0;
+  font-size: 15px;
+}
+
+.dialog-head p {
+  font-size: 12px;
+  margin-top: 4px;
+}
+
+.dialog-x {
+  padding: 3px 8px;
+  font-size: 12px;
+}
+
+.dialog-body {
+  padding: var(--s4) var(--s5);
+  overflow-y: auto;
+}
+
+.dialog-foot {
+  display: flex;
+  justify-content: flex-end;
+  gap: var(--s2);
+  padding: var(--s3) var(--s5);
+  border-top: 1px solid var(--line);
+  background: rgba(10, 9, 8, 0.4);
+}
+
+/* Before/after on a money change — the reason the dialog exists. */
+.preview {
+  display: grid;
+  grid-template-columns: 1fr auto 1fr;
+  align-items: center;
+  gap: var(--s3);
+  padding: var(--s3) var(--s4);
+  margin: var(--s3) 0;
+  border: 1px solid var(--line);
+  border-radius: var(--r);
+  background: var(--void);
+}
+
+.preview .k {
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.11em;
+  text-transform: uppercase;
+  color: var(--ink-mute);
+}
+
+.preview .v {
+  font-size: 19px;
+  margin-top: 3px;
+}
+
+.preview .arrow {
+  color: var(--gold);
+  font-size: 17px;
+}
+
+.pin-input {
+  font-size: 20px;
+  letter-spacing: 0.5em;
+  text-align: center;
+}
+
+/* ---------- OSINT ---------- */
+
+.osint-intro {
+  border-left: 3px solid var(--gold);
+  margin-bottom: var(--s3);
+}
+
+.osint-intro p {
+  font-size: 13px;
+  margin-bottom: var(--s2);
+  max-width: 74ch;
+}
+
+.osint-reason {
+  margin-bottom: var(--s4);
+}
+
+.osint-reason select {
+  max-width: 420px;
+}
+
+.osint-group {
+  margin-bottom: var(--s5);
+}
+
+.osint-group h4 {
+  font-family: var(--display);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--ink-mute);
+  margin-bottom: var(--s3);
+  padding-bottom: 5px;
+  border-bottom: 1px solid var(--line-soft);
+}
+
+.osint-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(230px, 1fr));
+  gap: var(--s3);
+}
+
+.osint-src {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 5px;
+  padding: var(--s3) var(--s4);
+  text-align: left;
+  background: var(--surface);
+  border: 1px solid var(--line-soft);
+  border-radius: var(--r);
+  animation: rise 0.3s cubic-bezier(0.2, 0.9, 0.3, 1) backwards;
+  animation-delay: calc(var(--i, 0) * 26ms);
+}
+
+.osint-src:not(:disabled):hover {
+  border-color: var(--gold);
+  background: var(--surface-3);
+  transform: translateY(-1px);
+}
+
+.osint-top {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--s2);
+}
+
+.osint-label {
+  font-family: var(--display);
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--ink);
+}
+
+.osint-hint {
+  font-size: 11px;
+  font-weight: 400;
+  line-height: 1.4;
+}
+
+.osint-term {
+  font-size: 11px;
+  color: var(--gold);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.osint-copied {
+  font-size: 10px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--emerald);
+}
+
+.osint-foot {
+  font-size: 11px;
+  max-width: 74ch;
+}
+
+.audit-osint td {
+  background: rgba(212, 175, 55, 0.05);
+}
+
+.details {
+  font-size: 11px;
+  max-width: 320px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* ---------- loading ---------- */
+
+.skeleton-stack {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s2);
+  padding: var(--s2) 0;
+}
+
+.skeleton {
+  height: 34px;
+  border-radius: var(--r);
+  background: linear-gradient(
+    90deg,
+    var(--ink-faint) 25%,
+    rgba(246, 241, 228, 0.09) 50%,
+    var(--ink-faint) 75%
+  );
+  background-size: 300% 100%;
+  animation: shimmer 1.5s ease-in-out infinite;
+  animation-delay: calc(var(--i, 0) * 90ms);
+}
+
+@keyframes shimmer {
+  from {
+    background-position: 150% 0;
+  }
+  to {
+    background-position: -150% 0;
+  }
+}
+
+/* ---------- responsive ---------- */
+
+.head .toolbar {
+  flex: none;
+}
+
+@media (max-width: 900px) {
+  .dossier {
+    grid-template-columns: auto 1fr;
+    gap: var(--s3);
+  }
+
+  .dossier-id h2 {
+    font-size: 22px;
+  }
+
+  .monogram.big {
+    width: 48px;
+    height: 48px;
+    font-size: 17px;
+  }
+
+  .dl-row,
+  .dl.tight .dl-row {
+    grid-template-columns: 1fr;
+    gap: 2px;
+  }
+
+  .tap {
+    grid-template-columns: 1fr auto;
+  }
+
+  .money-bar {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .search {
+    min-width: 0;
+    width: 100%;
+  }
+}
+
+/* ---------------------------------------------------------------- menu grid */
+
+.menu-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+  gap: 12px;
+}
+
+.menu-card {
+  background: var(--surface);
+  border: 1px solid var(--line-soft);
+  border-left: 3px solid var(--emerald);
+  border-radius: var(--r);
+  padding: 14px 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  cursor: default;
+  transition: border-color 0.18s ease, box-shadow 0.18s ease, opacity 0.18s ease;
+  animation: rise 0.32s cubic-bezier(0.2, 0.9, 0.3, 1) backwards;
+}
+
+.menu-card.unavailable {
+  border-left-color: var(--ink-mute);
+  opacity: 0.5;
+}
+
+.menu-card.unavailable .menu-card-name {
+  text-decoration: line-through;
+}
+
+.menu-card.editing {
+  border-color: var(--gold);
+  box-shadow: 0 0 0 3px var(--gold-dim);
+  opacity: 1;
+}
+
+.split .menu-card {
+  cursor: pointer;
+}
+
+.split .menu-card:hover:not(.editing) {
+  border-color: rgba(212, 175, 55, 0.35);
+}
+
+.menu-card-top {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  font-size: 12px;
+}
+
+.menu-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--ink-mute);
+}
+
+.menu-dot.on {
+  background: var(--emerald);
+}
+
+.menu-card-name {
+  font-weight: 600;
+  font-size: 17px;
+  line-height: 1.3;
+}
+
+.menu-card-price {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  font-size: 18px;
+}
+
+/* Stock sits above the admin actions and is shown to ALL staff: restocking is
+   the one menu action a non-admin may take. */
+.menu-card-stock {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-top: 2px;
+}
+
+.menu-card-stock button {
+  padding: 2px 12px;
+  font-size: 15px;
+  line-height: 1.2;
+}
+
+.stock-count {
+  flex: 1;
+  text-align: center;
+  font-family: var(--mono);
+  font-size: 12px;
+  color: var(--ink-soft);
+}
+
+/* Running low and running out are the two states worth interrupting for. */
+.stock-count.low {
+  color: var(--amber);
+}
+
+.stock-count.out {
+  color: var(--crimson);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.menu-card-actions {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-top: 4px;
+  padding-top: 8px;
+  border-top: 1px solid var(--line-soft);
+}
+
+.menu-card-actions button {
+  padding: 4px 10px;
+  font-size: 12px;
+}
+
+.menu-card-arrows {
+  display: flex;
+  gap: 2px;
+}
+
+.menu-card-arrows button {
+  padding: 4px 8px;
 }

@@ -1,8 +1,8 @@
 import { randomInt, randomUUID } from 'node:crypto'
 import type { Db } from '../db/index.js'
 import { findCardByUid, type Card } from './accounts.js'
-import { balanceOf } from './ledger.js'
-import { placeOrder, priceLines, type OrderRequestItem, type PayMethod } from './orders.js'
+import { balanceOf, postEntry } from './ledger.js'
+import { inStock, placeCustomOrder, placeOrder, priceLines, type OrderRequestItem, type PayMethod } from './orders.js'
 import { hashPassword, verifyPassword } from './password.js'
 
 export { canonUid } from './uid.js'
@@ -20,11 +20,15 @@ export type PosErrCode =
   | 'pin_locked'
   | 'empty'
   | 'insufficient'
+  | 'out_of_stock'
   | 'unknown_intent'
   | 'intent_expired'
   | 'intent_used'
   | 'pin_required'
   | 'pin_wrong'
+
+export type ChargeType = 'order' | 'custom'
+export type Direction = 'debit' | 'credit'
 
 export interface PosIntentRow {
   id: string
@@ -39,6 +43,9 @@ export interface PosIntentRow {
   created_at: string
   expires_at: string
   order_id: string | null
+  charge_type: ChargeType
+  direction: Direction
+  label: string | null
 }
 
 export type IntentResult =
@@ -50,17 +57,21 @@ export type IntentResult =
       totalPoints: number
       pinRequired: boolean
       expiresAt: string
+      direction: Direction
+      chargeType: ChargeType
+      label: string | null
     }
   | { ok: false; code: PosErrCode }
 
 export type ConfirmResult =
   | {
       ok: true
-      orderId: string
-      number: number
+      orderId: string | null
+      number: number | null
       balanceDeni: number
       points: number
       cardId: string
+      direction: Direction
     }
   | { ok: false; code: PosErrCode; attemptsLeft?: number }
 
@@ -145,55 +156,102 @@ function playerName(db: Db, card: Card): string {
  * point: if the client decided, it would simply never ask for a PIN.
  *
  * Charges nothing; confirmIntent does that.
+ *
+ * Supports two modes:
+ * - `items` (order mode): prices menu items and checks stock.
+ * - `customAmountDeni` (custom mode): free-form amount for chips, table charges, etc.
+ *   Credits (direction='credit') always require PIN — paying money out is not spot-checked.
  */
 export function createIntent(
   db: Db,
   opts: {
     cardUid: string
-    items: OrderRequestItem[]
-    pay: PayMethod
+    /** Menu-item mode. */
+    items?: OrderRequestItem[]
+    pay?: PayMethod
+    /** Custom-amount mode: free-form denars. */
+    customAmountDeni?: number
+    label?: string
+    direction?: Direction
     staff: string
-    /** Test seam: override the 1-in-8 roll. */
+    /**
+     * Overrides the 1-in-8 roll. Reachable only through StaffDeps.posPinDecision
+     * — never from a request body, or the check could be switched off per sale.
+     */
     forcePin?: boolean
   }
 ): IntentResult {
   const card = findCardByUid(db, opts.cardUid)
   if (!card) return { ok: false, code: 'unknown_card' }
   if (card.status !== 'active') return { ok: false, code: 'card_blocked' }
-  // A PIN-less card would never be spot-checked, so POS refuses it outright.
   if (!hasPin(db, card.id)) return { ok: false, code: 'no_pin_set' }
   if (isPinLocked(db, card.id)) return { ok: false, code: 'pin_locked' }
 
-  const lines = priceLines(db, opts.items)
-  if (lines.length === 0) return { ok: false, code: 'empty' }
+  const isCustom = opts.customAmountDeni !== undefined
+  const direction: Direction = opts.direction ?? 'debit'
+  const chargeType: ChargeType = isCustom ? 'custom' : 'order'
 
-  const totalDeni = lines.reduce((sum, l) => sum + l.lineTotalDeni, 0)
-  const totalPoints = lines.reduce((sum, l) => sum + l.lineTotalPoints, 0)
+  let totalDeni: number
+  let totalPoints: number
+  let pay: PayMethod
+  let itemsJson: string
 
-  const payingWithPoints = opts.pay === 'points'
-  const cost = payingWithPoints ? totalPoints : totalDeni
-  if (cost > balanceOf(db, card.id, payingWithPoints ? 'points' : 'deni')) {
-    return { ok: false, code: 'insufficient' }
+  if (isCustom) {
+    if (!Number.isInteger(opts.customAmountDeni) || opts.customAmountDeni! <= 0) {
+      return { ok: false, code: 'empty' }
+    }
+    totalDeni = opts.customAmountDeni!
+    totalPoints = 0
+    pay = 'cash'
+    itemsJson = '[]'
+
+    // Debit: check balance. Credit: money goes onto the card, no check needed.
+    if (direction === 'debit' && totalDeni > balanceOf(db, card.id, 'deni')) {
+      return { ok: false, code: 'insufficient' }
+    }
+  } else {
+    const items = opts.items ?? []
+    const lines = priceLines(db, items)
+    if (lines.length === 0) return { ok: false, code: 'empty' }
+    if (!inStock(db, lines)) return { ok: false, code: 'out_of_stock' }
+
+    totalDeni = lines.reduce((sum, l) => sum + l.lineTotalDeni, 0)
+    totalPoints = lines.reduce((sum, l) => sum + l.lineTotalPoints, 0)
+    pay = opts.pay ?? 'cash'
+    itemsJson = JSON.stringify(items)
+
+    const payingWithPoints = pay === 'points'
+    const cost = payingWithPoints ? totalPoints : totalDeni
+    if (cost > balanceOf(db, card.id, payingWithPoints ? 'points' : 'deni')) {
+      return { ok: false, code: 'insufficient' }
+    }
   }
 
-  const pinRequired = opts.forcePin ?? randomInt(PIN_CHECK_ODDS) === 0
+  // Credits always require PIN — paying money out must never be spot-checked.
+  const pinRequired = direction === 'credit'
+    ? true
+    : (opts.forcePin ?? randomInt(PIN_CHECK_ODDS) === 0)
+
   const id = randomUUID()
 
   db.prepare(
     `INSERT INTO pos_intents
        (id, card_id, staff_username, pay_method, items_json, total_deni, total_points,
-        pin_required, expires_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, datetime('now', ?))`
+        pin_required, expires_at, charge_type, direction, label)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, datetime('now', ?), ?, ?, ?)`
   ).run(
     id,
     card.id,
     opts.staff,
-    opts.pay,
-    JSON.stringify(opts.items),
+    pay,
+    itemsJson,
     totalDeni,
     totalPoints,
     pinRequired ? 1 : 0,
-    `+${INTENT_TTL_SECONDS} seconds`
+    `+${INTENT_TTL_SECONDS} seconds`,
+    chargeType,
+    direction,
+    opts.label ?? null
   )
 
   return {
@@ -207,13 +265,21 @@ export function createIntent(
     totalDeni,
     totalPoints,
     pinRequired,
-    expiresAt: getIntent(db, id)!.expires_at
+    expiresAt: getIntent(db, id)!.expires_at,
+    direction,
+    chargeType,
+    label: opts.label ?? null
   }
 }
 
 /**
  * Charges a pending intent. The PIN requirement is read back from the STORED
  * intent, never from the request — omitting the pin cannot skip the check.
+ *
+ * Three paths:
+ * - order debit: placeOrder with menu items (existing)
+ * - custom debit: placeCustomOrder with free-form amount
+ * - custom credit: postEntry with positive amount, no order
  */
 export function confirmIntent(db: Db, opts: { intentId: string; pin?: string }): ConfirmResult {
   return db.transaction((): ConfirmResult => {
@@ -238,29 +304,57 @@ export function confirmIntent(db: Db, opts: { intentId: string; pin?: string }):
       if (!check.ok) return { ok: false, code: 'pin_wrong', attemptsLeft: check.attemptsLeft }
     }
 
-    // Reuse the single money path: placeOrder does pricing, the funds check, the
-    // ledger debit and the order rows atomically. POS must not grow a parallel one.
-    const order = placeOrder(db, {
-      cardId: intent.card_id,
-      sessionId: null,
-      pay: intent.pay_method,
-      items: JSON.parse(intent.items_json) as OrderRequestItem[],
-      source: 'pos'
-    })
-    if (!order.ok) return { ok: false, code: order.code }
+    let orderId: string | null = null
+    let orderNumber: number | null = null
+
+    if (intent.charge_type === 'order') {
+      // Menu-item order: reuse the single money path.
+      const order = placeOrder(db, {
+        cardId: intent.card_id,
+        sessionId: null,
+        pay: intent.pay_method,
+        items: JSON.parse(intent.items_json) as OrderRequestItem[],
+        source: 'pos'
+      })
+      if (!order.ok) return { ok: false, code: order.code }
+      orderId = order.orderId
+      orderNumber = order.number
+    } else if (intent.direction === 'debit') {
+      // Custom debit: free-form charge (chips buy, table fee, etc.)
+      const order = placeCustomOrder(db, {
+        cardId: intent.card_id,
+        amountDeni: intent.total_deni,
+        label: intent.label ?? 'Друго',
+        source: 'pos'
+      })
+      if (!order.ok) return { ok: false, code: order.code }
+      orderId = order.orderId
+      orderNumber = order.number
+    } else {
+      // Custom credit: money goes onto the card (chip cashout).
+      postEntry(db, {
+        cardId: intent.card_id,
+        unit: 'deni',
+        amount: intent.total_deni,
+        kind: 'pos_credit',
+        ref: intent.id,
+        actor: intent.staff_username
+      })
+    }
 
     db.prepare(`UPDATE pos_intents SET state = 'consumed', order_id = ? WHERE id = ?`).run(
-      order.orderId,
+      orderId,
       intent.id
     )
 
     return {
       ok: true,
-      orderId: order.orderId,
-      number: order.number,
-      balanceDeni: order.balanceDeni,
-      points: order.points,
-      cardId: intent.card_id
+      orderId,
+      number: orderNumber,
+      balanceDeni: balanceOf(db, intent.card_id, 'deni'),
+      points: balanceOf(db, intent.card_id, 'points'),
+      cardId: intent.card_id,
+      direction: intent.direction
     }
   })()
 }

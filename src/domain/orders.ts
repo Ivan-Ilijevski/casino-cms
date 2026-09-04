@@ -6,7 +6,7 @@ import { getMenuItem } from './menu.js'
 export type PayMethod = 'cash' | 'points'
 export type OrderStatus = 'received' | 'accepted' | 'fulfilled' | 'cancelled'
 export type OrderSource = 'terminal' | 'pos'
-export type OrderErrCode = 'empty' | 'insufficient'
+export type OrderErrCode = 'empty' | 'insufficient' | 'out_of_stock'
 
 export interface OrderRow {
   id: string
@@ -48,6 +48,9 @@ export interface PricedLine {
  *
  * Mirrors the prototype: unknown drinks, non-positive quantities and
  * unavailable drinks are silently skipped rather than failing the order.
+ * A sold-out drink (stock_qty 0) is skipped for the same reason — it is not on
+ * the menu right now. Asking for MORE than is left is a different thing and
+ * fails the order in placeOrder, so nobody is quietly sold a short measure.
  *
  * Exported so POS can quote a cart without duplicating the menu maths.
  */
@@ -57,6 +60,7 @@ export function priceLines(db: Db, items: OrderRequestItem[]): PricedLine[] {
     const menuItem = getMenuItem(db, item.drink)
     const qty = Number(item.qty)
     if (!menuItem || !Number.isInteger(qty) || qty <= 0 || menuItem.available !== 1) continue
+    if (menuItem.stock_qty === 0) continue
     lines.push({
       drinkId: menuItem.drink_id,
       name: menuItem.name,
@@ -68,6 +72,19 @@ export function priceLines(db: Db, items: OrderRequestItem[]): PricedLine[] {
     })
   }
   return lines
+}
+
+/**
+ * True when every stock-tracked line can be served in full.
+ *
+ * Exported so POS can refuse a cart at quote time rather than after the tap.
+ * placeOrder re-checks inside its transaction; this is the friendly early one.
+ */
+export function inStock(db: Db, lines: PricedLine[]): boolean {
+  return lines.every((line) => {
+    const item = getMenuItem(db, line.drinkId)
+    return !item || item.stock_qty === null || item.stock_qty >= line.qty
+  })
 }
 
 export function getOrder(db: Db, orderId: string): OrderRow | undefined {
@@ -105,10 +122,21 @@ const ORDER_SELECT = `
 
 export function listOrders(
   db: Db,
-  filter: { status?: OrderStatus; limit?: number } = {}
+  filter: { status?: OrderStatus; playerId?: string; limit?: number } = {}
 ): OrderWithLines[] {
-  const where = filter.status ? 'WHERE o.status = ?' : ''
-  const params: unknown[] = filter.status ? [filter.status] : []
+  // playerId filters through the join ORDER_SELECT already makes, so the guest
+  // profile reuses this rather than growing a second order query.
+  const clauses: string[] = []
+  const params: unknown[] = []
+  if (filter.status) {
+    clauses.push('o.status = ?')
+    params.push(filter.status)
+  }
+  if (filter.playerId) {
+    clauses.push('c.player_id = ?')
+    params.push(filter.playerId)
+  }
+  const where = clauses.length ? `WHERE ${clauses.join(' AND ')}` : ''
   params.push(filter.limit ?? 100)
 
   const rows = db
@@ -163,6 +191,16 @@ export function setOrderStatus(
         })
         refunded = true
       }
+      // The drink was never poured, so it goes back on the shelf. Fulfilled
+      // orders keep their decrement. The status guard above is what stops a
+      // double-click restocking twice — same guard the refund relies on.
+      const restock = db.prepare(
+        `UPDATE menu_items SET stock_qty = stock_qty + ?
+         WHERE drink_id = ? AND stock_qty IS NOT NULL`
+      )
+      for (const line of getOrderLines(db, order.id)) {
+        restock.run(line.qty, line.drink_id)
+      }
     }
 
     const fulfilling = opts.status === 'fulfilled'
@@ -176,6 +214,60 @@ export function setOrderStatus(
     ).run(opts.status, fulfilling ? 1 : 0, opts.actor, fulfilling ? 1 : 0, order.id)
 
     return { ok: true, refunded, order: getOrder(db, order.id)! }
+  })()
+}
+
+/**
+ * Creates a single-line order for a free-form charge that has no menu item.
+ * drink_id 0 signals "not a menu item" — the name column carries the label.
+ */
+export function placeCustomOrder(
+  db: Db,
+  opts: {
+    cardId: string
+    amountDeni: number
+    label: string
+    source?: OrderSource
+  }
+): OrderResult {
+  return db.transaction((): OrderResult => {
+    if (opts.amountDeni > balanceOf(db, opts.cardId, 'deni')) {
+      return { ok: false, code: 'insufficient' }
+    }
+
+    const orderId = randomUUID()
+    const next = db.prepare('SELECT COALESCE(MAX(number), 0) + 1 AS n FROM orders').get() as {
+      n: number
+    }
+
+    db.prepare(
+      `INSERT INTO orders (id, number, card_id, session_id, pay_method, total_deni, total_points, source)
+       VALUES (?, ?, ?, NULL, 'cash', ?, 0, ?)`
+    ).run(orderId, next.n, opts.cardId, opts.amountDeni, opts.source ?? 'pos')
+
+    db.prepare(
+      `INSERT INTO order_items
+         (order_id, drink_id, name, qty, unit_price_deni, unit_points, line_total_deni, line_total_points)
+       VALUES (?, 0, ?, 1, ?, 0, ?, 0)`
+    ).run(orderId, opts.label, opts.amountDeni, opts.amountDeni)
+
+    if (opts.amountDeni > 0) {
+      postEntry(db, {
+        cardId: opts.cardId,
+        unit: 'deni',
+        amount: -opts.amountDeni,
+        kind: 'order',
+        ref: orderId
+      })
+    }
+
+    return {
+      ok: true,
+      orderId,
+      number: next.n,
+      balanceDeni: balanceOf(db, opts.cardId, 'deni'),
+      points: balanceOf(db, opts.cardId, 'points')
+    }
   })()
 }
 
@@ -203,6 +295,12 @@ export function placeOrder(
     if (cost > balanceOf(db, opts.cardId, unit)) {
       return { ok: false, code: 'insufficient' }
     }
+
+    // Every line is checked before ANY of them is decremented: better-sqlite3
+    // rolls back on a thrown error, not on a returned {ok:false}, so a
+    // decrement-as-you-go loop would commit the lines it got through before
+    // hitting the one that ran out. Same reason the balance check sits here.
+    if (!inStock(db, lines)) return { ok: false, code: 'out_of_stock' }
 
     const orderId = randomUUID()
     const next = db.prepare('SELECT COALESCE(MAX(number), 0) + 1 AS n FROM orders').get() as {
@@ -239,6 +337,14 @@ export function placeOrder(
         l.lineTotalDeni,
         l.lineTotalPoints
       )
+    }
+
+    const takeStock = db.prepare(
+      `UPDATE menu_items SET stock_qty = stock_qty - ?
+       WHERE drink_id = ? AND stock_qty IS NOT NULL`
+    )
+    for (const l of lines) {
+      takeStock.run(l.qty, l.drinkId)
     }
 
     if (cost > 0) {

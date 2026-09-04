@@ -1,6 +1,10 @@
-import { randomUUID } from 'node:crypto'
 import { Router } from 'express'
-import { createPlayerWithCard, findCardByUid, getCard } from '../../domain/accounts.js'
+import {
+  addCardToPlayer,
+  createPlayerWithCard,
+  findCardByUid,
+  getCard
+} from '../../domain/accounts.js'
 import { audit } from '../../domain/audit.js'
 import { balanceOf, historyFor, postEntry } from '../../domain/ledger.js'
 import { setPin } from '../../domain/pos.js'
@@ -28,7 +32,12 @@ export function playersRouter(deps: StaffDeps): Router {
     res.json(
       deps.db
         .prepare(
-          `SELECT p.*, COUNT(c.id) AS cards, COALESCE(SUM(c.balance_deni), 0) AS balance_deni
+          // Columns are listed, never `p.*`: migration 004 put dob and doc_id on
+          // players, and this route has no admin guard. A wildcard here hands a
+          // passport number to every barman, and would do it again silently the
+          // next time an identity column is added.
+          `SELECT p.id, p.name, p.created_at, p.phone, p.email, p.city,
+                  COUNT(c.id) AS cards, COALESCE(SUM(c.balance_deni), 0) AS balance_deni
            FROM players p LEFT JOIN cards c ON c.player_id = p.id
            GROUP BY p.id ORDER BY p.name`
         )
@@ -57,7 +66,11 @@ export function playersRouter(deps: StaffDeps): Router {
       res.status(404).json({ error: 'no such card' })
       return
     }
-    const player = deps.db.prepare('SELECT * FROM players WHERE id = ?').get(card.player_id)
+    // Same reason as GET /players: no wildcard, so 004's dob/doc_id stay out of
+    // a response any authenticated staff member can fetch.
+    const player = deps.db
+      .prepare('SELECT id, name, created_at, phone, email, city FROM players WHERE id = ?')
+      .get(card.player_id)
     res.json({
       card,
       player,
@@ -97,11 +110,10 @@ export function playersRouter(deps: StaffDeps): Router {
       if (typeof playerId === 'string' && playerId) {
         const player = deps.db.prepare('SELECT id FROM players WHERE id = ?').get(playerId)
         if (!player) return null
-        cardId = randomUUID()
         resolvedPlayerId = playerId
-        deps.db
-          .prepare('INSERT INTO cards (id, card_uid, player_id) VALUES (?, ?, ?)')
-          .run(cardId, cardUid, playerId)
+        // This branch used to insert its own row and forgot card_uid_canon, which
+        // left every second card unauthenticatable at both readers.
+        cardId = addCardToPlayer(deps.db, { playerId, cardUid }).id
       } else {
         if (typeof playerName !== 'string' || playerName.trim() === '') return null
         const created = createPlayerWithCard(deps.db, { name: playerName, cardUid })
