@@ -1,0 +1,29 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(npm run *)",
+      "Bash(grep -rn \"SMIB-\\\\|txn\" /Users/ivanilijevski/esp/cms-auth-terminal/cyd_test/tools/host_sim/ 2>/dev/null | head -20; echo \"=== firmware ===\"; grep -rn \"SMIB-%06u\\\\|txn_counter\\\\|snprintf.*txn\" /Users/ivanilijevski/esp/cms-auth-terminal/ --include=*.c --include=*.h 2>/dev/null | head -20)",
+      "Read(//Users/ivanilijevski/esp/cms-auth-terminal/**)",
+      "Bash(grep -rn \"SMIB-\" /Users/ivanilijevski/esp/cms-auth-terminal/ 2>/dev/null | grep -v \"\\\\.git/\" | head -20)",
+      "Bash(sqlite3 /private/tmp/claude-501/-Users-ivanilijevski-casino-cms/a162219f-2776-4a3f-835a-36695eb2548f/scratchpad/real.sqlite '.schema holds')",
+      "Bash(sqlite3 /private/tmp/claude-501/-Users-ivanilijevski-casino-cms/a162219f-2776-4a3f-835a-36695eb2548f/scratchpad/real.sqlite 'PRAGMA integrity_check; PRAGMA foreign_key_check;')",
+      "Bash(sqlite3 /private/tmp/claude-501/-Users-ivanilijevski-casino-cms/a162219f-2776-4a3f-835a-36695eb2548f/scratchpad/real.sqlite 'SELECT state, COUNT\\(*\\), SUM\\(amount_deni\\) FROM holds GROUP BY state;')",
+      "Bash(sqlite3 /private/tmp/claude-501/-Users-ivanilijevski-casino-cms/a162219f-2776-4a3f-835a-36695eb2548f/scratchpad/real.sqlite 'SELECT txn, COUNT\\(*\\) FROM holds WHERE state='\\\\''held'\\\\'' GROUP BY txn HAVING COUNT\\(*\\)>1;')",
+      "mcp__plugin_playwright_playwright__browser_navigate",
+      "mcp__plugin_playwright_playwright__browser_snapshot",
+      "Bash(grep -oiE \"cookie[A-Za-z_-]*|<script[^>]*>|fetch\\\\\\(|localStorage\" /tmp/ng-root.html | sort -u | head; echo \"=== inline script tail ===\"; sed -n 's/.*\\\\\\(function visitSite[^<]*\\\\\\).*/\\\\1/p' /tmp/ng-root.html | head -c 600; echo; grep -oE \"ngrok-skip-browser-warning|X-Tunnel|headers\" /tmp/ng-root.html | sort -u)",
+      "Read(//private/tmp/**)",
+      "Bash(pkill -f \"node.*vite\")",
+      "Bash(lsof -nP -iTCP:5173 -sTCP:LISTEN)",
+      "Bash(lsof -nP -iTCP:8090 -sTCP:LISTEN)",
+      "mcp__plugin_playwright_playwright__browser_click",
+      "Bash(npx tsx *)",
+      "Bash(curl -s -b admin.jar 'localhost:8097/api/reports/audit')",
+      "Bash(python3 -c ' *)",
+      "mcp__plugin_playwright_playwright__browser_fill_form"
+    ],
+    "additionalDirectories": [
+      "/private/tmp"
+    ]
+  }
+}

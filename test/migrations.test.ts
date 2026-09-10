@@ -286,3 +286,94 @@ describe('009_menu_vat', () => {
     ).toThrow(/CHECK/)
   })
 })
+
+describe('012_receipts', () => {
+  /** A receipt has to point at a real sale, so every case here needs one. */
+  function seedOrder(db: Db, id: string, number: number): string {
+    db.prepare(
+      `INSERT INTO orders (id, number, card_id, pay_method, total_deni, total_points)
+       VALUES (?, ?, 'c1', 'cash', 24000, 0)`
+    ).run(id, number)
+    return id
+  }
+
+  function insertReceipt(db: Db, r: { day: string; seq: number; orderId: string }): void {
+    db.prepare(
+      `INSERT INTO receipts (day, seq, order_id, pay_method, total_deni, actor, time_zone)
+       VALUES (?, ?, ?, 'cash', 24000, 'barman', 'Europe/Skopje')`
+    ).run(r.day, r.seq, r.orderId)
+  }
+
+  function upgraded(): Db {
+    const db = dbAtMigration('011_order_promised_at')
+    seedCard(db)
+    migrate(db)
+    return db
+  }
+
+  test('two receipts can never share a number on one day', () => {
+    const db = upgraded()
+    seedOrder(db, 'o1', 1)
+    seedOrder(db, 'o2', 2)
+    insertReceipt(db, { day: '2026-07-07', seq: 1, orderId: 'o1' })
+
+    expect(() => insertReceipt(db, { day: '2026-07-07', seq: 1, orderId: 'o2' })).toThrow(/UNIQUE/)
+  })
+
+  test('the same number on another day is fine — that is the whole point', () => {
+    const db = upgraded()
+    seedOrder(db, 'o1', 1)
+    seedOrder(db, 'o2', 2)
+
+    insertReceipt(db, { day: '2026-07-07', seq: 1, orderId: 'o1' })
+    insertReceipt(db, { day: '2026-07-08', seq: 1, orderId: 'o2' })
+
+    expect(db.prepare('SELECT COUNT(*) AS n FROM receipts WHERE seq = 1').get()).toEqual({ n: 2 })
+  })
+
+  test('one sale can only ever have one receipt', () => {
+    const db = upgraded()
+    seedOrder(db, 'o1', 1)
+    insertReceipt(db, { day: '2026-07-07', seq: 1, orderId: 'o1' })
+
+    // A reprint must be the same fiscal document, not a second number.
+    expect(() => insertReceipt(db, { day: '2026-07-07', seq: 2, orderId: 'o1' })).toThrow(/UNIQUE/)
+  })
+
+  test('a receipt cannot point at a sale that does not exist', () => {
+    const db = upgraded()
+
+    expect(() => insertReceipt(db, { day: '2026-07-07', seq: 1, orderId: 'nope' })).toThrow(
+      /FOREIGN KEY/
+    )
+  })
+
+  test('a number starts out allocated but not printed', () => {
+    const db = upgraded()
+    seedOrder(db, 'o1', 1)
+    insertReceipt(db, { day: '2026-07-07', seq: 1, orderId: 'o1' })
+
+    expect(db.prepare('SELECT rendered_at AS r FROM receipts').get()).toEqual({ r: null })
+  })
+
+  test('rejects a sequence number that is not a real position', () => {
+    const db = upgraded()
+    seedOrder(db, 'o1', 1)
+
+    expect(() => insertReceipt(db, { day: '2026-07-07', seq: 0, orderId: 'o1' })).toThrow(/CHECK/)
+  })
+
+  test('is idempotent — re-running migrate keeps the receipts already issued', () => {
+    const db = upgraded()
+    seedOrder(db, 'o1', 1)
+    insertReceipt(db, { day: '2026-07-07', seq: 1, orderId: 'o1' })
+
+    migrate(db)
+    migrate(db)
+
+    expect(db.prepare('SELECT COUNT(*) AS n FROM receipts').get()).toEqual({ n: 1 })
+    expect(
+      db.prepare("SELECT COUNT(*) AS n FROM schema_migrations WHERE name = '012_receipts'").get()
+    ).toEqual({ n: 1 })
+  })
+})

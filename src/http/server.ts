@@ -12,7 +12,8 @@ import { playersRouter } from './routes/players.js'
 import { posRouter } from './routes/pos.js'
 import { reportsRouter } from './routes/reports.js'
 import { ticketsRouter } from './routes/tickets.js'
-import { authenticate, currentUser, requireAuth, SESSION_COOKIE } from './staffAuth.js'
+import { usersRouter } from './routes/users.js'
+import { authenticate, currentUser, requireAuth, restrictBarRole, SESSION_COOKIE } from './staffAuth.js'
 
 /** The staff dashboard: static SPA + JSON API + the live order feed. */
 export function createStaffApp(deps: StaffDeps): express.Express {
@@ -60,6 +61,8 @@ export function createStaffApp(deps: StaffDeps): express.Express {
   // Everything below needs a signed-in staff member.
   const api = express.Router()
   api.use(requireAuth(deps.db))
+  // The bar tablet is default-deny, so this has to sit ahead of every router.
+  api.use(restrictBarRole())
   api.use(ordersRouter(deps))
   api.use(menuRouter(deps))
   api.use(playersRouter(deps))
@@ -67,6 +70,7 @@ export function createStaffApp(deps: StaffDeps): express.Express {
   api.use(posRouter(deps))
   api.use(ticketsRouter(deps))
   api.use(reportsRouter(deps))
+  api.use(usersRouter(deps))
   app.use('/api', api)
 
   // The built SPA, when present.

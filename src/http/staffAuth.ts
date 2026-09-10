@@ -2,7 +2,14 @@ import type { NextFunction, Request, Response } from 'express'
 import type { Db } from '../db/index.js'
 import { verifyPassword } from '../domain/password.js'
 
-export type StaffRole = 'admin' | 'staff'
+export type StaffRole = 'admin' | 'staff' | 'bar'
+
+/** The single list the CHECK constraint, the API validators and the UI agree on. */
+export const STAFF_ROLES: readonly StaffRole[] = ['admin', 'staff', 'bar']
+
+export function isStaffRole(value: unknown): value is StaffRole {
+  return typeof value === 'string' && (STAFF_ROLES as readonly string[]).includes(value)
+}
 
 export interface StaffUser {
   id: string
@@ -55,12 +62,49 @@ export function requireAuth(db: Db) {
   }
 }
 
-export function requireRole(role: StaffRole) {
+/**
+ * Passes only the listed roles. This used to read `role === 'admin' && ...`,
+ * which enforced nothing at all for any other argument — harmless while 'staff'
+ * was the only alternative, a hole the moment a third role exists.
+ */
+export function requireRole(...roles: StaffRole[]) {
   return (req: Request, res: Response, next: NextFunction): void => {
-    if (!req.staff || (role === 'admin' && req.staff.role !== 'admin')) {
+    if (!req.staff || !roles.includes(req.staff.role)) {
       res.status(403).json({ error: 'forbidden' })
       return
     }
     next()
+  }
+}
+
+/**
+ * Everything under /api that carries no requireRole is open to any signed-in
+ * user, so a restricted role cannot be expressed by adding guards — the next
+ * route someone writes would be open to it by omission.
+ *
+ * The bar tablet is therefore default-DENY: it may call what is listed here and
+ * nothing else. Paths are relative to the /api mount, which is what req.path
+ * holds inside this router (Express strips req.baseUrl).
+ */
+const BAR_ALLOWED: ReadonlyArray<{ method: string; path: RegExp }> = [
+  { method: 'GET', path: /^\/orders$/ },
+  { method: 'GET', path: /^\/orders\/events$/ },
+  { method: 'POST', path: /^\/orders\/[^/]+\/status$/ },
+  { method: 'GET', path: /^\/menu$/ },
+  { method: 'POST', path: /^\/menu\/[^/]+\/stock$/ },
+  { method: 'POST', path: /^\/me\/password$/ }
+]
+
+export function restrictBarRole() {
+  return (req: Request, res: Response, next: NextFunction): void => {
+    if (req.staff?.role !== 'bar') {
+      next()
+      return
+    }
+    if (BAR_ALLOWED.some((r) => r.method === req.method && r.path.test(req.path))) {
+      next()
+      return
+    }
+    res.status(403).json({ error: 'forbidden' })
   }
 }

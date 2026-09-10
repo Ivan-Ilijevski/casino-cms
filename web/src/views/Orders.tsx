@@ -1,16 +1,17 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { api, mkd, timeAgo, type Order } from '../api'
+import { EtaDialog } from '../components/EtaDialog'
 
 const STATUS_MK: Record<Order['status'], string> = {
   received: 'нова',
-  accepted: 'прифатена',
+  accepted: 'во тек',
   fulfilled: 'завршена',
   cancelled: 'откажана'
 }
 
 const FILTERS: Array<{ key: string; label: string }> = [
   { key: 'received', label: 'Нови' },
-  { key: 'accepted', label: 'Прифатени' },
+  { key: 'accepted', label: 'Во тек' },
   { key: 'fulfilled', label: 'Завршени' },
   { key: '', label: 'Сите' }
 ]
@@ -20,6 +21,7 @@ export function Orders({ onCount }: { onCount: (n: number) => void }) {
   const [filter, setFilter] = useState('received')
   const [live, setLive] = useState(false)
   const [busy, setBusy] = useState<string | null>(null)
+  const [accepting, setAccepting] = useState<Order | null>(null)
   const fresh = useRef<Set<string>>(new Set())
 
   const load = useCallback(async () => {
@@ -49,10 +51,10 @@ export function Orders({ onCount }: { onCount: (n: number) => void }) {
     return () => source.close()
   }, [load])
 
-  async function act(id: string, status: Order['status']) {
+  async function act(id: string, status: Order['status'], etaMinutes?: number) {
     setBusy(id)
     try {
-      const res = await api.setOrderStatus(id, status)
+      const res = await api.setOrderStatus(id, status, etaMinutes)
       if (res.refunded) fresh.current.delete(id)
       await load()
     } finally {
@@ -129,7 +131,7 @@ export function Orders({ onCount }: { onCount: (n: number) => void }) {
                 {(o.status === 'received' || o.status === 'accepted') && (
                   <div className="order-acts">
                     {o.status === 'received' && (
-                      <button disabled={busy === o.id} onClick={() => act(o.id, 'accepted')}>
+                      <button disabled={busy === o.id} onClick={() => setAccepting(o)}>
                         Прифати
                       </button>
                     )}
@@ -155,6 +157,19 @@ export function Orders({ onCount }: { onCount: (n: number) => void }) {
             </article>
           ))}
         </div>
+      )}
+
+      {accepting && (
+        <EtaDialog
+          orderNumber={accepting.number}
+          guest={accepting.player_name}
+          busy={busy === accepting.id}
+          onClose={() => setAccepting(null)}
+          onAccept={async (minutes) => {
+            await act(accepting.id, 'accepted', minutes)
+            setAccepting(null)
+          }}
+        />
       )}
     </>
   )

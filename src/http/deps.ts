@@ -35,6 +35,15 @@ export interface StaffDeps {
    * so a client able to set it would simply set it off on every sale.
    */
   posPinDecision?: () => boolean
+  /**
+   * The wall clock the fiscal day is read off. Tests pin an instant; production
+   * leaves it unset and the real clock stands.
+   *
+   * Injected rather than taken from the request for the same reason as
+   * posPinDecision: a client able to set it could choose which day its receipt
+   * counted on, which is the one thing a daily sequence must not allow.
+   */
+  now?: () => Date
 }
 
 /**

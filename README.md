@@ -156,6 +156,113 @@ PIN at registration (`POST /api/cards` with `pin`, or `POST /api/cards/:id/pin`)
 Only POS uses the PIN. The card terminal, ordering at the machine, and cashout are
 untouched.
 
+### Fiscal receipts print over Bluetooth (X5/X5h, no share sheet)
+
+With "Испринтај фискална" checked, `POST /api/pos/receipt` proxies the render to the
+external Receipt Render API (`CMS_RECEIPT_API_URL`, see **Configuration**) and the PNG
+that comes back is sent **straight to the printer over Web Bluetooth**. There is no share
+sheet and no third-party printer app in the path any more. The render API returns the
+image exactly **384 px wide** — the X5's native raster width — so nothing is resampled:
+`preparePngImage` only composites it on white, greys it and Atkinson-dithers it to 1-bit.
+`web/src/printer.ts` owns the connection, on top of the local `web-timini-print` package.
+
+**The tender line always says a card paid.** Every POS sale prints **`НА КРЕДИТ`**, and only
+a points purchase prints **`ПОЕНИ`** — `ВО ГОТОВО` can never appear, because the POS takes no
+cash: a sale is always settled from a balance held on the guest's card. Note that the
+`cash` pay method names the card's **денари** balance, not banknotes, which is why it prints
+as a card payment; that is not a typo waiting to be tidied up. The browser sends only
+`payMethod: 'cash' | 'points'` and the server picks the printed string
+(`PAYMENT_METHOD_LABELS` in `src/domain/receipt.ts`), so an unknown or missing value is a
+400 and nothing prints. That is deliberate: the render API fills every field it is *not*
+sent from its own preset, whose payment method is `ВО ГОТОВО`, so an omitted tender line
+does not fail — it quietly prints a cash sale that never happened.
+
+**Receipt numbers restart at 0001 every day.** The number is allocated server-side per
+sale and printed in the header as `#0001`. The `receipts` table *is* the counter —
+`MAX(seq) WHERE day = ?`, the same shape `orders.number` already uses — so there is no
+separate "last number" row that can drift from the receipts actually issued, and every
+number is recorded against the sale that earned it, with who printed it. A reprint of one
+sale reuses its number rather than taking a new one; `order_id` is UNIQUE, so a second
+fiscal document for one sale is not merely discouraged but impossible.
+
+The day is the **local** calendar day (`CMS_TIME_ZONE`, see **Configuration**), computed
+through ICU in `src/domain/businessDay.ts` — deliberately **not** `date(created_at)`, which
+is UTC and would roll the counter at 01:00 or 02:00 Skopje, in the middle of service. Nor a
+hardcoded +2: that is wrong for half the year and wrong in both directions across the two
+changeover weekends, which the tests pin.
+
+**A failed render gives its number back**, so the sequence stays dense — a hole in a daily
+fiscal sequence is exactly what gets asked about later. The number has to be allocated
+*before* the render (it goes into the request, and better-sqlite3 cannot hold a transaction
+across an `await`), so the release is a compensating delete, guarded two ways: it only ever
+touches a row that never printed, and only the tail of its day. If a later sale already took
+the next number, the delete is a no-op and the row stays with `rendered_at` NULL — which
+reads as "allocated, never printed" instead of as an unexplained missing number.
+
+**Requirements.** Chromium only (Chrome/Edge) — Web Bluetooth exists in neither Safari nor
+Firefox. A **secure context is mandatory**: HTTPS or `localhost`, so `http://<lan-ip>:8090`
+cannot print. That is the same constraint Web NFC already puts on the POS (step 2 of
+**Setting it up on the tablet**), and both are satisfied by the same thing: in development
+the ngrok host that `vite.config.ts` allow-lists, or the per-device Chrome insecure-origin
+flag, which makes the whole origin a secure context; in production, real HTTPS. The device
+must be an **X5 or X5h** — the library matches those two names only and rejects an
+uppercase `X5H`, which upstream maps to a different model. As with the card reader, the
+POS feature-detects (`checkPrinterSupport`) and says why it cannot print rather than
+offering a dead button.
+
+**Pairing is one-time, in Поставки → Печатач.** `TiMiniPrinter.requestPrinter()` opens
+Chrome's device chooser, and Chrome only shows that while a user gesture is still live —
+which is exactly why pairing is a button in Settings and never something the payment flow
+triggers. Two consequences:
+
+- **A reload drops the pairing.** Web Bluetooth cannot silently restore a connection
+  without a fresh gesture, so the operator re-pairs after every refresh or kiosk reboot.
+  Switching the printer off or walking out of range does the same, and nothing reconnects
+  on its own.
+- **Moving between views does not.** The connection is a module-level singleton in
+  `web/src/printer.ts`, not React state, so it survives `Pos.tsx` unmounting; Settings and
+  the POS read the same store through `useSyncExternalStore`.
+
+**The transfer settings are hardcoded on purpose**: `chunkSize: 182`, `delayMs: 50`,
+`blackening: 5` (depth 1–5, 5 darkest — bar thermal paper fades fast) and `feed: 3` steps
+after each job. Those are the values measured against the real X5h — the library's
+`docs/hardware-verification.md` — and they are deliberately not configurable. The browser
+cannot ask Chrome for the negotiated ATT MTU, so 182 is a *measured* payload capacity, not
+a negotiated one, and a larger chunk silently corrupts a job instead of failing. What is
+**not** verified upstream: how far one `feed` step advances the paper (the bytes are
+identical to the Python reference at 1/2/3/8 steps, but it has never been measured on
+paper), paper output for an arbitrary PNG as opposed to the reference fixture, and the
+plain X5 — only the X5h has printed.
+
+**A finished transfer is not a finished print.** `printRasterImage()` resolves when the
+last byte is written; the printer sends back no completion acknowledgement, so all the app
+knows is that the bytes left the tablet. Every string the operator sees therefore says
+**"испратено"** (sent) and never "испечатено" (printed). That wording is deliberate — it
+is not a translation slip to be tidied up later.
+
+**A failure needs a re-pair, and there is no fallback.** A failed write may already have
+been delivered, so the library refuses every further job on that link until a disconnect
+and a fresh connect; `printPng` therefore tears the connection down, drops to idle and
+makes the next attempt a deliberate re-pair. It **never retries by itself**. With the
+share sheet gone there is nothing to fall back to — an unpaired or broken printer means no
+receipt at all — so the cart screen warns before the card is charged, and the done screen
+offers a manual retry.
+
+### `web-timini-print` is installed from a local path
+
+```json
+"web-timini-print": "git+file:///Users/ivanilijevski/Web-TiMini-Print"
+```
+
+That absolute path exists on exactly one laptop, and the package is not on npm, so
+**`npm ci` (and a fresh `npm install`) fails on any other machine — including the venue
+box.** Two ways out, neither done yet:
+
+- `npm pack` the library and commit the tarball as `vendor/web-timini-print-*.tgz`, then
+  depend on `file:vendor/…`; or
+- push it to a git remote and pin a commit SHA — it currently has neither a remote nor
+  tags, so there is nothing to pin today.
+
 ## The invariant that matters most
 
 `debit_commit`, `debit_rollback` and `credit_req` are **idempotent by `txn`**.
@@ -228,7 +335,22 @@ See `.env.example`. Notable:
 - `CMS_RECEIPT_API_URL` / `CMS_RECEIPT_API_KEY` — origin and key for the external
   fiscal receipt-render service the POS calls after a bar payment when
   "Испринтај фискална" is checked. Unset = `POST /api/pos/receipt` fails closed
-  with 503 rather than silently skipping the print.
+  with 503 rather than silently skipping the print. The 384 px PNG it returns goes
+  to the paired Bluetooth printer — see **Fiscal receipts print over Bluetooth**.
+- `CMS_TIME_ZONE` — IANA zone the venue is in, default `Europe/Skopje`. Fixes where
+  the fiscal day ends, and so when receipt numbers restart at 0001; the database
+  stays UTC regardless. Deployment-wide rather than receipt-specific, because it is
+  a property of where the venue is — `/reports` should eventually use it too. An
+  unresolvable zone throws at startup, not at the first sale of the night.
+- `CMS_RECEIPT_STORE_NAME` / `CMS_RECEIPT_ADDRESS` — the legal entity and address
+  printed in the receipt header. The render API fills every field it isn't sent
+  from its own demo preset, so an unset store name prints *its* sample company on
+  our receipts; set both in production. The server adds them to the render request
+  itself, so the browser cannot put a different company on a fiscal receipt — and for
+  the same reason it derives the tender line rather than accepting one. There is
+  deliberately **no** `CMS_RECEIPT_PAYMENT_METHOD`: what a receipt was paid with is a
+  property of the sale, not of the deployment. The receipt number is derived the
+  same way, from the sale and the local day.
 
 ## Not built yet (deliberately)
 

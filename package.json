@@ -5,25 +5,26 @@
   "type": "module",
   "description": "Casino Management System: SMIB card terminal backend (TCP 9020), TITO tickets + legacy voucher API (8080), staff web app (8090).",
   "engines": {
-    "node": ">=20"
+    "node": ">=20.12.0"
   },
   "scripts": {
-    "dev": "tsx watch src/main.ts",
+    "dev": "tsx watch --env-file-if-exists=.env src/main.ts",
     "dev:web": "vite",
-    "start": "node dist/main.js",
+    "start": "node --env-file-if-exists=.env dist/main.js",
     "build": "npm run typecheck && tsc -p tsconfig.json && vite build",
     "build:server": "tsc -p tsconfig.json",
     "build:web": "vite build",
     "typecheck": "tsc -p tsconfig.json --noEmit && tsc -p web/tsconfig.json --noEmit",
     "test": "vitest run",
     "test:watch": "vitest",
-    "seed": "tsx src/db/seed.ts",
-    "import:vouchers": "tsx src/db/importVouchers.ts"
+    "seed": "tsx --env-file-if-exists=.env src/db/seed.ts",
+    "import:vouchers": "tsx --env-file-if-exists=.env src/db/importVouchers.ts"
   },
   "dependencies": {
     "better-sqlite3": "^12.2.0",
     "cookie-parser": "^1.4.7",
-    "express": "^5.1.0"
+    "express": "^5.1.0",
+    "web-timini-print": "git+file:///Users/ivanilijevski/Web-TiMini-Print"
   },
   "devDependencies": {
     "@types/better-sqlite3": "^7.6.11",

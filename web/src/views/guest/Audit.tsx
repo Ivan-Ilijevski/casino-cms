@@ -12,7 +12,7 @@ const ACTION_MK: Record<string, string> = {
   'card.set_pin': 'Поставен ПИН',
   'pos.charge': 'Наплата на каса',
   'order.received': 'Примена нарачка',
-  'order.accepted': 'Прифатена нарачка',
+  'order.accepted': 'Нарачка во тек',
   'order.fulfilled': 'Испорачана нарачка',
   'order.cancelled': 'Откажана нарачка',
   'player.update': 'Изменет идентитет',

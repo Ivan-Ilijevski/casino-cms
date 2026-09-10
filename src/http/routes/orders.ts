@@ -10,6 +10,9 @@ import { pushBalanceForCard, type StaffDeps } from '../deps.js'
 
 const STATUSES: OrderStatus[] = ['received', 'accepted', 'fulfilled', 'cancelled']
 
+/** Four hours is longer than any drink takes; past that it is a typo. */
+const MAX_ETA_MINUTES = 240
+
 export function ordersRouter(deps: StaffDeps): Router {
   const router = Router()
 
@@ -29,8 +32,23 @@ export function ordersRouter(deps: StaffDeps): Router {
       return
     }
 
+    const etaMinutes = req.body?.eta_minutes
+    if (etaMinutes !== undefined && etaMinutes !== null) {
+      if (!Number.isInteger(etaMinutes) || etaMinutes < 1 || etaMinutes > MAX_ETA_MINUTES) {
+        res
+          .status(400)
+          .json({ error: `eta_minutes must be an integer between 1 and ${MAX_ETA_MINUTES}` })
+        return
+      }
+    }
+
     const actor = req.staff!.username
-    const result = setOrderStatus(deps.db, { orderId: req.params.id, status, actor })
+    const result = setOrderStatus(deps.db, {
+      orderId: req.params.id,
+      status,
+      actor,
+      ...(typeof etaMinutes === 'number' ? { etaMinutes } : {})
+    })
     if (!result.ok) {
       res.status(result.reason === 'unknown_order' ? 404 : 409).json({ error: result.reason })
       return
@@ -41,7 +59,12 @@ export function ordersRouter(deps: StaffDeps): Router {
       action: `order.${status}`,
       entityType: 'order',
       entityId: req.params.id,
-      details: { refunded: result.refunded }
+      details: {
+        refunded: result.refunded,
+        ...(result.order.promised_at && status === 'accepted'
+          ? { etaMinutes, promisedAt: result.order.promised_at }
+          : {})
+      }
     })
 
     // A refund changed the balance — tell the terminal before the player notices.

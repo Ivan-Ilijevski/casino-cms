@@ -1,7 +1,19 @@
+/** 'bar' is the tablet at the bar: orders and the drink list, nothing else. */
+export type StaffRole = 'admin' | 'staff' | 'bar'
+
 export interface StaffUser {
   id: string
   username: string
-  role: 'admin' | 'staff'
+  role: StaffRole
+}
+
+/** What the admin user list shows. The password hash never crosses the wire. */
+export interface StaffAccount {
+  id: string
+  username: string
+  role: StaffRole
+  active: number
+  created_at: string
 }
 
 export interface OrderLine {
@@ -23,7 +35,12 @@ export interface Order {
   total_points: number
   status: 'received' | 'accepted' | 'fulfilled' | 'cancelled'
   created_at: string
+  /** Last status change — while an order is `accepted`, this is when it was. */
+  updated_at: string
   fulfilled_by: string | null
+  fulfilled_at: string | null
+  /** When the guest was told it would be ready. NULL = accepted without one. */
+  promised_at: string | null
   player_name: string
   card_uid: string
   items: OrderLine[]
@@ -292,8 +309,12 @@ export const api = {
   logout: () => post<{ ok: true }>('/logout'),
 
   orders: (status?: string) => req<Order[]>(`/orders${status ? `?status=${status}` : ''}`),
-  setOrderStatus: (id: string, status: string) =>
-    post<{ order: Order; refunded: boolean }>(`/orders/${id}/status`, { status }),
+  /** `etaMinutes` only bites when accepting; the server fixes the clock. */
+  setOrderStatus: (id: string, status: string, etaMinutes?: number) =>
+    post<{ order: Order; refunded: boolean }>(`/orders/${id}/status`, {
+      status,
+      ...(etaMinutes === undefined ? {} : { eta_minutes: etaMinutes })
+    }),
 
   menu: () => req<{ items: MenuItem[]; warning: string | null }>('/menu'),
   createDrink: (item: Partial<MenuItem>) => post<MenuItem>('/menu', item),
@@ -334,17 +355,23 @@ export const api = {
    * Renders a fiscal receipt as a PNG. Returns the image itself rather than
    * JSON, so this bypasses req/post and reads the response as a Blob.
    */
-  receiptImage: async (items: ReceiptLine[], paymentMethod?: string): Promise<Blob> => {
+  receiptImage: async (
+    items: ReceiptLine[],
+    payMethod: 'cash' | 'points',
+    orderId: string
+  ): Promise<{ blob: Blob; number: string | null }> => {
     const res = await fetch('/api/pos/receipt', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ items, ...(paymentMethod ? { paymentMethod } : {}) })
+      body: JSON.stringify({ items, payMethod, orderId })
     })
     if (!res.ok) {
       const body = await res.json().catch(() => ({}))
       throw new ApiError(body.error ?? `receipt failed (${res.status})`, res.status)
     }
-    return res.blob()
+    // The server allocates the daily number; it comes back in a header so the done
+    // screen can name the receipt without asking for it separately.
+    return { blob: await res.blob(), number: res.headers.get('X-Receipt-Number') }
   },
 
   tickets: (status?: string) => req<Ticket[]>(`/tickets${status ? `?status=${status}` : ''}`),
@@ -397,7 +424,21 @@ export const api = {
   registerCardFor: (cardUid: string, playerId: string, pin?: string) =>
     post<{ card: Card }>('/cards', { cardUid, playerId, ...(pin ? { pin } : {}) }),
   dismissTap: (cardUid: string) =>
-    req<{ ok: true }>(`/unknown-taps/${encodeURIComponent(cardUid)}`, { method: 'DELETE' })
+    req<{ ok: true }>(`/unknown-taps/${encodeURIComponent(cardUid)}`, { method: 'DELETE' }),
+
+  users: () => req<{ users: StaffAccount[] }>('/users'),
+  createUser: (body: { username: string; password: string; role: StaffRole }) =>
+    post<StaffAccount>('/users', body),
+  updateUser: (id: string, patch: { username?: string; role?: StaffRole; active?: boolean }) =>
+    req<StaffAccount>(`/users/${id}`, { method: 'PATCH', body: JSON.stringify(patch) }),
+  setUserPassword: (id: string, password: string) =>
+    post<{ ok: true }>(`/users/${id}/password`, { password }),
+  /** The one user route open to every role — the bar tablet included. */
+  changeMyPassword: (currentPassword: string, newPassword: string) =>
+    post<{ ok: true }>('/me/password', {
+      current_password: currentPassword,
+      new_password: newPassword
+    })
 }
 
 /** Drops empty values so a blank search box doesn't become `?q=`. */

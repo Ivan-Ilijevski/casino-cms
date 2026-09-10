@@ -2766,3 +2766,395 @@ textarea:focus {
 .menu-card-arrows button {
   padding: 4px 8px;
 }
+
+/* ----------------------------------------------------------- Корисници */
+
+/* A name that opens its account. Reads as text, behaves as a button — the row
+   itself stays un-clickable so the table is still one tab stop per user. */
+.linkish {
+  background: none;
+  border: none;
+  padding: 0;
+  font: inherit;
+  color: var(--ink);
+  cursor: pointer;
+}
+
+.linkish:hover {
+  color: var(--gold-bright);
+  background: none;
+}
+
+/* Settings grew a second panel, so the cards need air between them. */
+.settings-card + .settings-card {
+  margin-top: var(--s4);
+}
+
+.settings-card h3 + p {
+  margin-bottom: 14px;
+}
+
+.settings-card button[type='submit'] {
+  margin-top: 4px;
+}
+
+/* ------------------------------------------------- шанк · табла со нарачки */
+
+/*
+  The drawer machinery below 900px is exactly what the board wants at every
+  width: one column, a fixed off-canvas rail, a topbar to open it. Rather than
+  duplicate those rules the board re-declares the same handful, so a change to
+  the mobile drawer keeps working here.
+*/
+.shell.board {
+  grid-template-columns: 1fr;
+  grid-template-rows: auto 1fr;
+}
+
+.shell.board .topbar {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: calc(8px + env(safe-area-inset-top)) calc(12px + env(safe-area-inset-right)) 8px
+    calc(12px + env(safe-area-inset-left));
+  border-bottom: 1px solid var(--line);
+  background: var(--surface);
+}
+
+.shell.board .rail {
+  position: fixed;
+  inset: 0 auto 0 0;
+  z-index: 40;
+  width: 232px;
+  padding-top: calc(22px + env(safe-area-inset-top));
+  padding-bottom: calc(22px + env(safe-area-inset-bottom));
+  transform: translateX(-100%);
+  transition: transform 0.18s ease;
+}
+
+.shell.board .rail.open {
+  transform: none;
+}
+
+.shell.board .scrim {
+  display: block;
+  position: fixed;
+  inset: 0;
+  z-index: 30;
+  background: rgba(10, 9, 8, 0.62);
+}
+
+/* The board manages its own scrolling, per column. Flex rather than a height
+   percentage, so the columns fill the viewport without depending on every
+   ancestor resolving a definite height. */
+.shell.board .main {
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  padding: 0;
+  min-height: 0;
+}
+
+/* Named apart from the .shell.board modifier above on purpose: the shell
+   element carries both classes, so a shared name would style it too. */
+.bo-board {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+}
+
+/* The board's title and connection state live in the topbar beside the brand
+   rather than in a header of their own, which buys the columns a whole row of
+   height and keeps the one strip of chrome saying everything. */
+.topbar-sep {
+  color: var(--line);
+}
+
+/* Status, not a heading, so it sits at the far edge rather than in the title
+   group — the same place the board's own header used to keep it. */
+.topbar-live {
+  margin-left: auto;
+}
+
+.topbar-title {
+  font-size: 14px;
+  color: var(--ink-soft);
+  letter-spacing: 0.01em;
+  white-space: nowrap;
+}
+
+.bo-cols {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 1px;
+  flex: 1;
+  min-height: 0;
+  background: var(--line);
+}
+
+.bo-col {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  background: var(--void);
+}
+
+.bo-colhead {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  padding: 10px 12px;
+  background: var(--surface);
+  border-bottom: 1px solid var(--line-soft);
+}
+
+.bo-colhead h3 {
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.11em;
+  text-transform: uppercase;
+  color: var(--ink-mute);
+}
+
+.bo-count {
+  font-family: var(--mono);
+  font-size: 12px;
+  color: var(--ink-soft);
+  background: var(--surface-2);
+  border-radius: 999px;
+  padding: 1px 8px;
+}
+
+.bo-scroll {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding-bottom: calc(12px + env(safe-area-inset-bottom));
+}
+
+.bo-empty {
+  text-align: center;
+  font-size: 13px;
+  padding: 26px 8px;
+}
+
+/* --- картичка --- */
+
+.bo-card {
+  position: relative;
+  background: var(--surface);
+  border: 1px solid var(--line-soft);
+  border-radius: 10px;
+  padding: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  animation: rise 0.32s cubic-bezier(0.2, 0.9, 0.3, 1) backwards;
+}
+
+.bo-card.new {
+  border-color: rgba(212, 175, 55, 0.32);
+}
+
+.bo-card.done {
+  opacity: 0.72;
+}
+
+.bo-top {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.bo-id {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.bo-no {
+  font-family: var(--mono);
+  font-size: 12px;
+  color: var(--ink-mute);
+}
+
+.bo-who {
+  font-size: 15px;
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.bo-servedat {
+  font-family: var(--mono);
+  font-size: 12px;
+  color: var(--ink-mute);
+  flex: none;
+}
+
+.bo-sum {
+  font-size: 13px;
+}
+
+.bo-lines {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding-top: 8px;
+  border-top: 1px solid var(--line-soft);
+}
+
+.bo-line {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+}
+
+.bo-qty {
+  font-family: var(--mono);
+  font-size: 12px;
+  background: var(--surface-2);
+  border-radius: 4px;
+  padding: 2px 7px;
+}
+
+/* More than one of something is the thing that gets misread off a card. */
+.bo-qty.many {
+  background: var(--gold-dim);
+  color: var(--gold-bright);
+}
+
+.bo-nm {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.bo-by {
+  font-size: 12px;
+}
+
+.bo-acts {
+  display: flex;
+  gap: 8px;
+}
+
+/* Thumb-sized: this is the one control that gets used all night. */
+.bo-primary {
+  flex: 1;
+  padding: 12px;
+  font-size: 14px;
+}
+
+.bo-more {
+  flex: none;
+  padding: 12px 14px;
+  line-height: 1;
+}
+
+.bo-catch {
+  position: fixed;
+  inset: 0;
+  z-index: 20;
+}
+
+.bo-menu {
+  position: absolute;
+  right: 12px;
+  bottom: 52px;
+  z-index: 21;
+  background: var(--surface-2);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 6px;
+  box-shadow: 0 10px 28px rgba(10, 9, 8, 0.6);
+}
+
+.bo-menu button {
+  width: 100%;
+  white-space: nowrap;
+}
+
+/* --- прстен --- */
+
+.ring {
+  width: 44px;
+  height: 44px;
+  flex: none;
+}
+
+.ring-track {
+  fill: none;
+  stroke: var(--line);
+  stroke-width: 3;
+}
+
+.ring-arc {
+  fill: none;
+  stroke-width: 3;
+  stroke-linecap: round;
+  transition: stroke-dashoffset 0.4s linear;
+}
+
+.ring-num {
+  font-family: var(--mono);
+  font-size: 14px;
+  font-weight: 600;
+  fill: var(--ink);
+}
+
+.ring.ok .ring-arc {
+  stroke: var(--gold);
+}
+.ring.warn .ring-arc {
+  stroke: var(--amber);
+}
+.ring.warn .ring-num {
+  fill: var(--amber);
+}
+.ring.late .ring-arc {
+  stroke: var(--crimson);
+}
+.ring.late .ring-num {
+  fill: var(--crimson);
+}
+
+/* --- дијалог за време --- */
+
+.eta-presets {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-bottom: 16px;
+}
+
+.eta-presets .pill {
+  padding: 9px 16px;
+  font-size: 14px;
+}
+
+/* A phone in the hand: the third column would be 100px wide, so they stack. */
+@media (max-width: 720px) {
+  .bo-cols {
+    grid-template-columns: minmax(0, 1fr);
+    grid-auto-rows: minmax(180px, auto);
+    overflow-y: auto;
+  }
+  .bo-col {
+    min-height: 0;
+  }
+  .bo-scroll {
+    overflow: visible;
+  }
+}

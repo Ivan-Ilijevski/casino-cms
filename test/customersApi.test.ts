@@ -59,8 +59,11 @@ describe('GET /api/customers', () => {
     const res = await agent.get('/api/customers')
 
     expect(res.status).toBe(200)
-    expect(res.body).toHaveLength(1)
-    expect(res.body[0]).toMatchObject({
+    // A page — { rows, total, limit, offset } — not a bare array. `total` is
+    // counted before the limit so the list can say "200 of 412".
+    expect(res.body.rows).toHaveLength(1)
+    expect(res.body.total).toBe(1)
+    expect(res.body.rows[0]).toMatchObject({
       name: 'Иван Илијевски',
       cards: 2,
       balance_deni: 102500
@@ -73,9 +76,9 @@ describe('GET /api/customers', () => {
     const terminal = await agent.get('/api/customers').query({ q: TERMINAL_UID })
     const nfc = await agent.get('/api/customers').query({ q: NFC_UID })
 
-    expect(terminal.body).toHaveLength(1)
-    expect(nfc.body).toHaveLength(1)
-    expect(nfc.body[0].id).toBe(playerId)
+    expect(terminal.body.rows).toHaveLength(1)
+    expect(nfc.body.rows).toHaveLength(1)
+    expect(nfc.body.rows[0].id).toBe(playerId)
   })
 
   test('filters by tag', async () => {
@@ -85,8 +88,10 @@ describe('GET /api/customers', () => {
 
     const res = await agent.get('/api/customers').query({ tag: 'vip' })
 
-    expect(res.body).toHaveLength(1)
-    expect(res.body[0].tags).toEqual(['vip'])
+    expect(res.body.rows).toHaveLength(1)
+    expect(res.body.rows[0].tags).toEqual(['vip'])
+    // Counted after the filter: Марија is on the floor but not in this total.
+    expect(res.body.total).toBe(1)
   })
 })
 

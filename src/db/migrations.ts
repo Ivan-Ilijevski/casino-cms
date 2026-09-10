@@ -423,5 +423,89 @@ export const migrations: Migration[] = [
         CHECK (vat_type IN ('A', 'B', 'V', 'G'));
       ALTER TABLE menu_items ADD COLUMN is_domestic INTEGER NOT NULL DEFAULT 1;
     `
+  },
+  {
+    // The tablet behind the bar only takes orders and reads the drink list, so
+    // handing it a 'staff' account would also hand it the guest CRM, the POS
+    // and every player's PII. 'bar' is that account with nothing else attached;
+    // what it may call is the allowlist in http/staffAuth.ts, not this CHECK.
+    name: '010_staff_bar_role',
+    sql: `
+      -- Rebuild: SQLite cannot widen a column CHECK in place. Nothing has a
+      -- foreign key to staff_users, so a plain copy is safe.
+      CREATE TABLE staff_users_new (
+        id            TEXT PRIMARY KEY,
+        username      TEXT NOT NULL UNIQUE,
+        password_hash TEXT NOT NULL,
+        role          TEXT NOT NULL CHECK (role IN ('admin','staff','bar')),
+        active        INTEGER NOT NULL DEFAULT 1,
+        created_at    TEXT NOT NULL DEFAULT (datetime('now'))
+      );
+      INSERT INTO staff_users_new (id, username, password_hash, role, active, created_at)
+        SELECT id, username, password_hash, role, active, created_at FROM staff_users;
+      DROP TABLE staff_users;
+      ALTER TABLE staff_users_new RENAME TO staff_users;
+    `
+  },
+  {
+    // Accepting an order now promises the guest a time, and the bar board counts
+    // down to it. Additive on purpose: the alternative shape was a fifth status
+    // between accepted and fulfilled, which would mean rebuilding a table that
+    // order_items and pos_intents both point at, with foreign_keys ON and
+    // migrations running inside a transaction where the pragma is a no-op.
+    //
+    // NULL means "accepted before this shipped, or accepted with no estimate" —
+    // every reader has to handle it, so the board falls back to elapsed time.
+    name: '011_order_promised_at',
+    sql: `
+      ALTER TABLE orders ADD COLUMN promised_at TEXT;
+    `
+  },
+  {
+    // A fiscal receipt carries a number that restarts at 0001 every day, so the
+    // number alone is not an identifier — (day, seq) is.
+    //
+    // This table IS the counter: MAX(seq) WHERE day = ? derives the next one,
+    // the same shape orders.number already uses, so there is no second mutable
+    // "last number" row that can drift from the receipts actually issued.
+    //
+    // `day` is the local calendar day in `time_zone`, computed in TS through ICU
+    // (domain/businessDay.ts) and NOT date(created_at) — created_at is UTC, which
+    // would roll the counter over at 01:00 or 02:00 Skopje depending on season,
+    // in the middle of service. time_zone is recorded per row so an old day stays
+    // interpretable after CMS_TIME_ZONE is ever changed.
+    //
+    // order_id is UNIQUE because a reprint of one sale must be the same fiscal
+    // document, never a second number. If voiding and reissuing is ever designed,
+    // relaxing this is far cheaper than finding duplicate numbering at an audit.
+    //
+    // pay_method/total_deni snapshot what the paper said. The receipt is the
+    // fiscal record and orders is the commercial one: an order can be cancelled
+    // and refunded afterwards, and the receipt still printed.
+    //
+    // rendered_at NULL means a number was allocated but never reached paper —
+    // the one thing that makes a gap in the sequence explainable.
+    name: '012_receipts',
+    sql: `
+      CREATE TABLE receipts (
+        -- Doubles as the never-resetting progressive count of every receipt ever
+        -- issued, which MK fiscal law wants alongside the daily one. The render
+        -- service hardcodes its own and exposes no field for it, so this is
+        -- recorded from day one and not yet printed.
+        id          INTEGER PRIMARY KEY AUTOINCREMENT,
+        day         TEXT    NOT NULL,
+        seq         INTEGER NOT NULL CHECK (seq > 0),
+        order_id    TEXT    NOT NULL UNIQUE REFERENCES orders(id),
+        pay_method  TEXT    NOT NULL CHECK (pay_method IN ('cash','points')),
+        total_deni  INTEGER NOT NULL,
+        actor       TEXT    NOT NULL,
+        time_zone   TEXT    NOT NULL,
+        created_at  TEXT    NOT NULL DEFAULT (datetime('now')),
+        rendered_at TEXT,
+        -- Both the guarantee that one day never issues a number twice and the
+        -- index the allocator's MAX(seq) WHERE day = ? reads.
+        UNIQUE (day, seq)
+      );
+    `
   }
 ]

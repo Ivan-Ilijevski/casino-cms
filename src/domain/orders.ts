@@ -22,6 +22,8 @@ export interface OrderRow {
   updated_at: string
   fulfilled_by: string | null
   fulfilled_at: string | null
+  /** When the guest was told it would be ready. NULL = accepted without one. */
+  promised_at: string | null
 }
 
 export interface OrderRequestItem {
@@ -167,7 +169,17 @@ export type StatusResult =
  */
 export function setOrderStatus(
   db: Db,
-  opts: { orderId: string; status: OrderStatus; actor: string }
+  opts: {
+    orderId: string
+    status: OrderStatus
+    actor: string
+    /**
+     * Minutes from now, only meaningful when accepting. A minutes offset rather
+     * than a timestamp so the SERVER fixes the clock: a tablet running slow
+     * cannot promise a time that has already passed.
+     */
+    etaMinutes?: number
+  }
 ): StatusResult {
   return db.transaction((): StatusResult => {
     const order = getOrder(db, opts.orderId)
@@ -204,14 +216,27 @@ export function setOrderStatus(
     }
 
     const fulfilling = opts.status === 'fulfilled'
+    // An estimate only means anything on the way into 'accepted'; on any other
+    // transition it is ignored rather than rejected, so a client that always
+    // sends one cannot be wrong.
+    const promising = opts.status === 'accepted' && opts.etaMinutes !== undefined
     db.prepare(
       `UPDATE orders
        SET status = ?,
            updated_at = datetime('now'),
            fulfilled_by = CASE WHEN ? THEN ? ELSE fulfilled_by END,
-           fulfilled_at = CASE WHEN ? THEN datetime('now') ELSE fulfilled_at END
+           fulfilled_at = CASE WHEN ? THEN datetime('now') ELSE fulfilled_at END,
+           promised_at  = CASE WHEN ? THEN datetime('now', ?) ELSE promised_at END
        WHERE id = ?`
-    ).run(opts.status, fulfilling ? 1 : 0, opts.actor, fulfilling ? 1 : 0, order.id)
+    ).run(
+      opts.status,
+      fulfilling ? 1 : 0,
+      opts.actor,
+      fulfilling ? 1 : 0,
+      promising ? 1 : 0,
+      `+${opts.etaMinutes ?? 0} minutes`,
+      order.id
+    )
 
     return { ok: true, refunded, order: getOrder(db, order.id)! }
   })()

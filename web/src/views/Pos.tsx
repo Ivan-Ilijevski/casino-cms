@@ -1,8 +1,14 @@
-import { Fragment, useEffect, useMemo, useRef, useState } from 'react'
+import { Fragment, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react'
 import { api, mkd, type MenuItem, type PosDirection, type PosIntentResponse } from '../api'
 import { Dialog } from '../components/Dialog'
 import { useIsMobile } from '../media'
-import { shareFile } from '../share'
+import {
+  describePrinterError,
+  PrinterJobError,
+  printerState,
+  printPng,
+  subscribePrinter
+} from '../printer'
 import { checkNfcSupport, NfcScanError, readCardUid } from '../webnfc'
 import contactlessSvg from '../assets/Universal_Contactless_Card_Symbol.svg'
 import logoCheck from '../assets/logo-check.gif'
@@ -11,17 +17,27 @@ type Stage = 'cart' | 'tap' | 'pin' | 'done' | 'failed'
 type PosMode = 'bar' | 'charge'
 
 /**
- * 'working' while the render call is in flight; 'manual' once the image is
- * ready but navigator.share() didn't go through on its own (unsupported, or
- * the gesture went stale) — the done screen then offers a button to retry it
- * from a fresh tap. 'error' means the render call itself failed.
+ * 'working' covers the whole stretch before the receipt is on paper: the render
+ * call in flight, then the Bluetooth transfer — whose progress lives in the
+ * printer store, not here. 'manual' no longer means "the share sheet didn't
+ * open"; it means the image is ready but it is NOT on paper, either because
+ * nothing is paired or because the transfer failed. Those two need different
+ * copy, so the reason travels in `message` rather than in a second status —
+ * one branch in the done screen stays easier to read than two. The fetched
+ * `blob` is kept with it so the retry button re-sends the same image instead of
+ * hitting the render API again. 'error' means the render call itself failed and
+ * there is nothing to retry with.
  */
 type ReceiptStatus = 'idle' | 'working' | 'manual' | 'error'
 interface ReceiptState {
   status: ReceiptStatus
   blob: Blob | null
+  /** Macedonian explanation shown for 'manual'; null for every other status. */
+  message: string | null
+  /** The daily fiscal number the server put on the paper, once it has one. */
+  number: string | null
 }
-const RECEIPT_IDLE: ReceiptState = { status: 'idle', blob: null }
+const RECEIPT_IDLE: ReceiptState = { status: 'idle', blob: null, message: null, number: null }
 
 interface Quote {
   intentId: string
@@ -52,6 +68,26 @@ const ERROR_MK: Record<string, string> = {
 const mkError = (code?: string, fallback = 'Настана грешка.') =>
   (code && ERROR_MK[code]) || fallback
 
+/**
+ * Why the receipt is not on paper, in one sentence the operator can act on.
+ * Both PrinterJobError kinds send them to the same place — Поставки — but for
+ * different reasons: nothing was ever paired, or the transfer failed and
+ * printer.ts tore the link down on purpose (a half-written job must not be
+ * repeated on the same connection), so even the retry needs a fresh pairing
+ * first. describePrinterError already names the cause in Macedonian; this only
+ * adds where to go next.
+ */
+function notPrintedMk(err: unknown): string {
+  const cause = describePrinterError(err)
+  if (err instanceof PrinterJobError && err.kind === 'not-connected') {
+    return `${cause} Сметката е подготвена и чека да биде пратена.`
+  }
+  if (err instanceof PrinterJobError && err.kind === 'transfer-failed') {
+    return `${cause} Спарете го печатачот повторно во Поставки, па пратете ја сметката одново.`
+  }
+  return cause
+}
+
 export function Pos({ onExit }: { onExit: () => void }) {
   const [menu, setMenu] = useState<MenuItem[]>([])
   const [cart, setCart] = useState<Record<number, number>>({})
@@ -75,6 +111,10 @@ export function Pos({ onExit }: { onExit: () => void }) {
   const [customAmount, setCustomAmount] = useState('')
   const [customDirection, setCustomDirection] = useState<PosDirection>('debit')
   const [customLabel, setCustomLabel] = useState('Чипови')
+
+  // The printer connection outlives this view (it is a module singleton in
+  // printer.ts), so pairing state is read from its store, not from React state.
+  const printerLive = useSyncExternalStore(subscribePrinter, printerState)
 
   const support = useMemo(() => checkNfcSupport(), [])
 
@@ -144,6 +184,18 @@ export function Pos({ onExit }: { onExit: () => void }) {
     resetTimer.current = setTimeout(reset, 3500)
   }
 
+  /**
+   * Holds that auto-clear open. charge() arms it for every sale, but a receipt
+   * can take longer than it does — a Bluetooth transfer of a 384px raster is
+   * seconds, not milliseconds — and a retry button that vanishes under the
+   * operator's thumb is no fallback at all. The receipt path holds the timer
+   * and re-arms it once there is nothing left to do.
+   */
+  function holdReset() {
+    if (resetTimer.current) clearTimeout(resetTimer.current)
+    resetTimer.current = null
+  }
+
   /** Arm the reader (needs a user gesture), then quote against the tapped card. */
   async function armAndQuote() {
     setErr('')
@@ -185,14 +237,40 @@ export function Pos({ onExit }: { onExit: () => void }) {
   }
 
   /**
+   * Sends an already-rendered receipt to the paired printer. Shared by the
+   * automatic attempt and by the retry button, so a retry re-sends the same
+   * blob and the render API is never hit twice for one sale.
+   *
+   * Deliberately never retries by itself: printPng drops the connection after a
+   * failed transfer, so another attempt is only meaningful once the operator has
+   * paired again — a decision that belongs to them, not to a timer.
+   */
+  async function sendToPrinter(blob: Blob, number: string | null) {
+    holdReset()
+    setReceipt({ status: 'working', blob, message: null, number })
+    try {
+      await printPng(blob)
+      // Resolved means the last byte left the tablet, not that paper came out —
+      // so nothing here claims the receipt was printed.
+      setReceipt(RECEIPT_IDLE)
+      scheduleReset()
+    } catch (e) {
+      setReceipt({ status: 'manual', blob, message: notPrintedMk(e), number })
+    }
+  }
+
+  /**
    * Fires after a bar-mode payment succeeds. Non-blocking on purpose — the
    * "done" screen is already showing, this just fills in the print status on
-   * top of it. Tries to open the share sheet itself; if that doesn't go
-   * through (unsupported, or the gesture went stale by the time both network
-   * calls resolve) it leaves the fetched image for a manual retry button.
+   * top of it. Renders the fiscal receipt server-side, then hands the PNG
+   * straight to the paired Bluetooth printer. Pairing never happens from here:
+   * Chrome's device chooser needs a live gesture and must not interrupt a sale,
+   * so it lives in Поставки and this path only ever finds a printer or doesn't.
    */
-  async function tryPrintReceipt() {
-    setReceipt({ status: 'working', blob: null })
+  async function tryPrintReceipt(orderId: string) {
+    holdReset()
+    setReceipt({ status: 'working', blob: null, message: null, number: null })
+    let rendered: { blob: Blob; number: string | null }
     try {
       const lines = items.map((i) => {
         const m = menu.find((x) => x.drink_id === i.drink)!
@@ -204,20 +282,16 @@ export function Pos({ onExit }: { onExit: () => void }) {
           isDomestic: m.is_domestic === 1
         }
       })
-      const blob = await api.receiptImage(lines, pay === 'points' ? 'ПОЕНИ' : undefined)
-      const file = new File([blob], 'receipt.png', { type: 'image/png' })
-      const shared = await shareFile(file, 'Фискална сметка')
-      if (shared) {
-        setReceipt(RECEIPT_IDLE)
-        scheduleReset()
-      } else {
-        // Leave the done screen up so the "Печати" button below has time to be tapped.
-        setReceipt({ status: 'manual', blob })
-      }
+      // The sale, not the cart, is what gets a fiscal number — so a reprint of the
+      // same order reuses its number rather than consuming the next one.
+      rendered = await api.receiptImage(lines, pay, orderId)
     } catch {
-      setReceipt({ status: 'error', blob: null })
+      // The image itself could not be rendered, so there is no blob to retry with.
+      setReceipt({ status: 'error', blob: null, message: null, number: null })
       scheduleReset()
+      return
     }
+    await sendToPrinter(rendered.blob, rendered.number)
   }
 
   async function charge(intentId: string, withPin?: string) {
@@ -233,9 +307,20 @@ export function Pos({ onExit }: { onExit: () => void }) {
         return
       }
       setStage('done')
-      if (printReceipt && mode === 'bar') void tryPrintReceipt()
-      else setReceipt(RECEIPT_IDLE)
-      scheduleReset()
+      // mode === 'bar' already implies an order — a pos credit never reaches here —
+      // so res.orderId only narrows the type and states the invariant out loud.
+      if (printReceipt && mode === 'bar' && res.orderId) {
+        // The receipt path owns the auto-clear from here. Arming it alongside
+        // would re-arm the timer that tryPrintReceipt just held: `void` only
+        // runs it up to its first await, so this line would land after its
+        // holdReset() and a render slower than 3.5s would wipe the done screen
+        // mid-flight — taking the retry button, the only remaining road to
+        // paper, with it. It re-arms scheduleReset() on every outcome that ends.
+        void tryPrintReceipt(res.orderId)
+      } else {
+        setReceipt(RECEIPT_IDLE)
+        scheduleReset()
+      }
     } finally {
       setBusy(false)
     }
@@ -298,9 +383,18 @@ export function Pos({ onExit }: { onExit: () => void }) {
           </div>
           <p className="muted">{quote.player.name}</p>
 
+          {/*
+            The money has already moved by the time this screen exists, so every
+            printing outcome below stays small and muted underneath the amount —
+            a printer problem must never read as a failed sale. Progress comes
+            from the printer store; the local status only says which phase we are
+            in, since the render call reports no progress of its own.
+          */}
           {receipt.status === 'working' && (
             <p className="muted" style={{ fontSize: 13 }}>
-              Подготвување фискална сметка…
+              {printerLive.status === 'printing'
+                ? `Сметката се испраќа кон печатачот… ${printerLive.percent}%`
+                : 'Подготвување фискална сметка…'}
             </p>
           )}
           {receipt.status === 'error' && (
@@ -308,22 +402,24 @@ export function Pos({ onExit }: { onExit: () => void }) {
               Фискалната сметка не можеше да се подготви.
             </p>
           )}
+          {receipt.number && receipt.status !== 'error' && (
+            <p className="muted" style={{ fontSize: 13 }}>
+              Фискална сметка #{receipt.number}
+            </p>
+          )}
           {receipt.status === 'manual' && receipt.blob && (
-            <button
-              className="ghost"
-              style={{ marginTop: 8 }}
-              onClick={() => {
-                const blob = receipt.blob!
-                void shareFile(new File([blob], 'receipt.png', { type: 'image/png' }), 'Фискална сметка').then(
-                  () => {
-                    setReceipt(RECEIPT_IDLE)
-                    scheduleReset()
-                  }
-                )
-              }}
-            >
-              Печати фискална
-            </button>
+            <>
+              <p className="muted" style={{ fontSize: 13, maxWidth: 340 }}>
+                {receipt.message}
+              </p>
+              <button
+                className="ghost"
+                style={{ marginTop: 8 }}
+                onClick={() => void sendToPrinter(receipt.blob!, receipt.number)}
+              >
+                Прати кон печатачот
+              </button>
+            </>
           )}
 
           <button className="gold" onClick={reset} style={{ marginTop: 22 }}>
@@ -520,6 +616,17 @@ export function Pos({ onExit }: { onExit: () => void }) {
         />
         <span>Испринтај фискална</span>
       </label>
+      {/*
+        With the share sheet gone there is no second road to paper, and an
+        unpaired printer would otherwise only surface after the money has moved.
+        Quiet and non-blocking on purpose: charging without a receipt is a
+        legitimate choice, so this neither blocks checkout nor unchecks the box.
+      */}
+      {printReceipt && printerLive.status !== 'ready' && (
+        <div className="hint">
+          Нема спарен печатач — сметката нема да излезе на хартија. Спарете печатач во Поставки.
+        </div>
+      )}
 
       {!payable && (
         <div className="banner" style={{ marginTop: 12 }}>
