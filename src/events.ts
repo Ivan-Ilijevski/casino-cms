@@ -3,6 +3,15 @@ import { EventEmitter } from 'node:events'
 export interface CmsEventMap {
   'order.created': { orderId: string }
   'order.updated': { orderId: string }
+  /**
+   * A terminal connection came or went. machineId is null while the cabinet is
+   * unregistered, which is exactly when the admin most wants to be told: that is
+   * a machine waiting to be adopted.
+   */
+  'machine.connected': { connId: string; machineId: string | null }
+  'machine.disconnected': { connId: string; machineId: string | null }
+  /** The registry row changed (renamed, adopted, taken out of service). */
+  'machine.updated': { machineId: string }
 }
 
 /**

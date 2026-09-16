@@ -14,6 +14,15 @@ import { BarOrders } from './views/BarOrders'
 import { Users } from './views/Users'
 import { GuestProfile } from './views/GuestProfile'
 import { Guests } from './views/Guests'
+import { Machines } from './views/Machines'
+import {
+  MachineMeters,
+  MachineOrders,
+  MachineOverview,
+  MachineProfile,
+  MachineSessions,
+  MachineTickets
+} from './views/MachineProfile'
 import { Menu } from './views/Menu'
 import { Orders } from './views/Orders'
 import { Pos } from './views/Pos'
@@ -36,6 +45,7 @@ const TABS: Array<{ path: string; label: string; roles?: StaffRole[] }> = [
   { path: '/guests', label: 'Гости', roles: ['admin', 'staff'] },
   { path: '/tickets', label: 'Тикети', roles: ['admin', 'staff'] },
   { path: '/reports', label: 'Извештаи', roles: ['admin', 'staff'] },
+  { path: '/machines', label: 'Машини', roles: ['admin'] },
   { path: '/users', label: 'Корисници', roles: ['admin'] }
 ]
 
@@ -250,6 +260,18 @@ function Shell({ user, onOut }: { user: StaffUser; onOut: () => void }) {
           )}
           {!isBar && <Route path="/tickets" element={<Tickets isAdmin={isAdmin} />} />}
           {!isBar && <Route path="/reports" element={<Reports />} />}
+          {isAdmin && (
+            <>
+              <Route path="/machines" element={<Machines />} />
+              <Route path="/machines/:id" element={<MachineProfile />}>
+                <Route index element={<MachineOverview />} />
+                <Route path="sessions" element={<MachineSessions />} />
+                <Route path="orders" element={<MachineOrders />} />
+                <Route path="tickets" element={<MachineTickets />} />
+                <Route path="meters" element={<MachineMeters />} />
+              </Route>
+            </>
+          )}
           {isAdmin && <Route path="/users" element={<Users me={user} />} />}
           {/* Reached by the gear in the rail footer, so deliberately not in TABS. */}
           <Route path="/settings" element={<Settings />} />

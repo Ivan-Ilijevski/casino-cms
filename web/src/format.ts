@@ -9,6 +9,18 @@ function parse(sqlTime: string): Date {
   return new Date(sqlTime.replace(' ', 'T') + 'Z')
 }
 
+/**
+ * Epoch ms for a SQLite UTC timestamp.
+ *
+ * `new Date('2026-09-10 15:13:41')` is read as LOCAL time by every engine, so
+ * doing arithmetic on a raw column value is wrong by the venue's UTC offset —
+ * a socket opened seconds ago reads as two hours old in Skopje. Everything that
+ * measures an interval goes through here.
+ */
+export function sqlMs(sqlTime: string): number {
+  return parse(sqlTime).getTime()
+}
+
 const MONTHS = [
   'јануари', 'февруари', 'март', 'април', 'мај', 'јуни',
   'јули', 'август', 'септември', 'октомври', 'ноември', 'декември'

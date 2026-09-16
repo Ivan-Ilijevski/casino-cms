@@ -3158,3 +3158,112 @@ textarea:focus {
     overflow: visible;
   }
 }
+
+/* ------ машини · оперативен преглед на кабините
+
+   Deliberately adds no new surface treatment. The floor list is read the same
+   way the order board is — at a glance, from a few metres — so the only colour
+   spent here is the state dot, and everything else leans on the existing card,
+   table and tag vocabulary. Flat, one hairline, no gradients. */
+
+.m-state {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--s2);
+  font-size: 11px;
+  letter-spacing: 0.09em;
+  text-transform: uppercase;
+  color: var(--ink-soft);
+  white-space: nowrap;
+}
+
+.m-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--ink-mute);
+  flex: none;
+}
+
+/* Only a live, talking cabinet gets the pulse. A quiet one must not look busy. */
+.m-state.online .m-dot {
+  background: var(--emerald);
+  box-shadow: 0 0 0 0 rgba(58, 160, 111, 0.6);
+  animation: pulse 2.4s infinite;
+}
+
+.m-state.silent .m-dot {
+  background: var(--amber);
+}
+
+.m-state.offline .m-dot {
+  background: var(--crimson);
+}
+
+/* Out of service is not a fault: grey, never red, or a real outage hides in the noise. */
+.m-state.parked {
+  color: var(--ink-mute);
+}
+
+.m-name {
+  display: flex;
+  align-items: center;
+  gap: var(--s3);
+}
+
+/* The cabinet name is an identifier read at a glance — wrapping "Shining Crown
+   01" over three lines turns a scannable column into a paragraph. The card
+   already scrolls sideways, so let the row be as wide as it needs. */
+.m-name .linkish {
+  white-space: nowrap;
+}
+
+.m-name .muted {
+  font-size: 12px;
+  margin-top: 2px;
+  white-space: nowrap;
+}
+
+.m-actions {
+  display: flex;
+  gap: var(--s2);
+  justify-content: flex-end;
+  flex-wrap: nowrap;
+}
+
+.m-actions button {
+  white-space: nowrap;
+}
+
+.m-parked td {
+  opacity: 0.55;
+}
+
+/* The adoption queue. A gold hairline is the app's "needs you" signal — the same
+   one a new order carries — because an unnamed cabinet is a job, not a state. */
+.m-adopt {
+  border-left: 2px solid var(--gold);
+}
+
+.m-adopt .muted {
+  margin-bottom: var(--s4);
+  max-width: 68ch;
+}
+
+/* Reuses the existing entrance rather than inventing a second motion language. */
+.stats,
+.m-adopt {
+  animation: rise 0.36s cubic-bezier(0.2, 0.9, 0.3, 1) backwards;
+}
+
+.m-adopt {
+  animation-delay: 60ms;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .stats,
+  .m-adopt,
+  .m-state.online .m-dot {
+    animation: none;
+  }
+}

@@ -377,3 +377,48 @@ describe('012_receipts', () => {
     ).toEqual({ n: 1 })
   })
 })
+
+describe('013_machines', () => {
+  test('machines is keyed on host, not on the shared firmware device id', () => {
+    const db = dbAtMigration('013_machines')
+
+    db.prepare("INSERT INTO machines (id, label, host, device_id) VALUES ('m1','К1','10.0.0.1','smib-1')").run()
+
+    // Two cabinets flashed from one firmware image both report "smib-1", so a
+    // UNIQUE on device_id would make the second one unregistrable.
+    expect(() =>
+      db.prepare("INSERT INTO machines (id, label, host, device_id) VALUES ('m2','К2','10.0.0.2','smib-1')").run()
+    ).not.toThrow()
+    expect(() =>
+      db.prepare("INSERT INTO machines (id, label, host) VALUES ('m3','К3','10.0.0.1')").run()
+    ).toThrow()
+  })
+
+  test('many machines may sit with no host at all', () => {
+    const db = dbAtMigration('013_machines')
+
+    db.prepare("INSERT INTO machines (id, label) VALUES ('m1','К1')").run()
+
+    // The index is partial, so NULL hosts do not collide.
+    expect(() => db.prepare("INSERT INTO machines (id, label) VALUES ('m2','К2')").run()).not.toThrow()
+  })
+
+  test('status is constrained to the two the UI knows', () => {
+    const db = dbAtMigration('013_machines')
+
+    expect(() =>
+      db.prepare("INSERT INTO machines (id, label, status) VALUES ('m1','К1','retired')").run()
+    ).toThrow()
+  })
+
+  test('sessions.machine_id carries no foreign key', () => {
+    const db = dbAtMigration('013_machines')
+
+    // foreign_keys is ON. An FK here would make every openSession() validate
+    // against an oversight table, so a missing machines table would stop a guest
+    // logging in. tickets.machine_id has been FK-free since 001 for the same
+    // reason; this pins that sessions matches it.
+    const fks = db.prepare('PRAGMA foreign_key_list(sessions)').all() as Array<{ table: string }>
+    expect(fks.map((f) => f.table)).not.toContain('machines')
+  })
+})

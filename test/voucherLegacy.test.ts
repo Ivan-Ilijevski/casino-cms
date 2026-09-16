@@ -1,6 +1,7 @@
 import request from 'supertest'
 import { beforeEach, describe, expect, test } from 'vitest'
 import { openTestDb, type Db } from '../src/db/index.js'
+import { createMachine } from '../src/domain/machines.js'
 import { getTicket, issueTicketWithId } from '../src/domain/tickets.js'
 import { createVoucherApp } from '../src/http/voucherLegacy.js'
 
@@ -157,5 +158,55 @@ describe('the slot game round-trip', () => {
     expect(validated.body).toEqual({ valid: true, credit: 660.11 })
     // The game does Math.round(credit * 100) to get deni back.
     expect(Math.round(validated.body.credit * 100)).toBe(66011)
+  })
+})
+
+/**
+ * tickets.machine_id has existed since 001 and nothing ever filled it. The slot
+ * game reaches 8080 from the same host that holds its socket on 9020, so the
+ * request address links the two -- with the game unchanged and every response
+ * shape still pinned to the original server.
+ */
+describe('machine attribution', () => {
+  // supertest dials over loopback, so this is the cabinet as far as the app is
+  // concerned. normaliseHost folds the ::ffff: form Node may report.
+  const registerLoopback = () =>
+    createMachine(db, { label: 'Кабина 1', host: '127.0.0.1' })
+
+  test('a cashout is attributed to the machine that asked for it', async () => {
+    const machine = registerLoopback()
+
+    const res = await request(app)
+      .post('/generate')
+      .set('x-api-key', API_KEY)
+      .send({ credit: 500 })
+
+    expect(res.status).toBe(200)
+    expect(res.body).toEqual({ success: true, id: res.body.id })
+    expect(getTicket(db, res.body.id)?.machine_id).toBe(machine.id)
+  })
+
+  test('a redeem records which machine took the ticket', async () => {
+    const machine = registerLoopback()
+    issueTicketWithId(db, { id: '123456789012345678', amountDeni: 40000 })
+
+    const res = await request(app).post('/validate').send({ id: '123456789012345678' })
+
+    expect(res.body).toEqual({ valid: true, credit: 400 })
+    expect(getTicket(db, '123456789012345678')?.redeemed_by).toBe(machine.label)
+  })
+
+  test('an unregistered floor keeps the legacy behaviour exactly', async () => {
+    issueTicketWithId(db, { id: '123456789012345678', amountDeni: 40000 })
+
+    const generated = await request(app)
+      .post('/generate')
+      .set('x-api-key', API_KEY)
+      .send({ credit: 500 })
+    const redeemed = await request(app).post('/validate').send({ id: '123456789012345678' })
+
+    expect(getTicket(db, generated.body.id)?.machine_id).toBeNull()
+    expect(getTicket(db, '123456789012345678')?.redeemed_by).toBe('slot-machine')
+    expect(redeemed.body).toEqual({ valid: true, credit: 400 })
   })
 })

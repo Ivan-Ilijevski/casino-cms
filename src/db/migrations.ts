@@ -507,5 +507,62 @@ export const migrations: Migration[] = [
         UNIQUE (day, seq)
       );
     `
+  },
+  {
+    // The CMS has spoken to slot machines since day one without ever recording
+    // that one existed: CmsTcpServer held its connections in a bare Set<Socket>
+    // with no id, no address and no timestamps, so "is cabinet 3 online?" had no
+    // answer. This is the registry behind the admin Machines view.
+    //
+    // The terminal already identifies itself -- cms.c sends hello {dev, fw, proto}
+    // on connect and on every link down->up edge -- but SMIB_DEVICE_ID is a
+    // COMPILE-TIME constant in board.h, so every terminal flashed from one image
+    // reports the same "smib-1". device_id is therefore recorded as a reported
+    // attribute and is deliberately NOT unique; `host` (the remote IP, one per
+    // slot PC) is the discriminator that actually separates two cabinets.
+    //
+    // The index is partial so many rows may sit with host IS NULL -- a machine
+    // registered from its asset tag before it has ever dialled in.
+    //
+    // status is ADVISORY. Nothing in the wire path reads it: taking a machine out
+    // of service greys it in the UI and drops it from the expected-online count,
+    // and card auth at that cabinet keeps working. Refusing auth here would put a
+    // new failure branch in the money path for the sake of a label.
+    name: '013_machines',
+    sql: `
+      CREATE TABLE machines (
+        id         TEXT PRIMARY KEY,
+        label      TEXT NOT NULL,
+        device_id  TEXT,
+        host       TEXT,
+        location   TEXT,
+        asset_no   TEXT,
+        serial     TEXT,
+        status     TEXT NOT NULL DEFAULT 'in_service'
+                     CHECK (status IN ('in_service','out_of_service')),
+        notes      TEXT,
+        fw         TEXT,
+        proto      INTEGER,
+        first_seen TEXT,
+        last_seen  TEXT,
+        connects   INTEGER NOT NULL DEFAULT 0,
+        created_at TEXT NOT NULL DEFAULT (datetime('now')),
+        updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+      );
+
+      CREATE UNIQUE INDEX idx_machines_host ON machines(host) WHERE host IS NOT NULL;
+
+      -- Which cabinet a card session was opened at. Nullable with no backfill:
+      -- sessions that predate machine identity genuinely have no machine, and
+      -- guessing one retroactively would invent history. tickets.machine_id has
+      -- existed since 001 and is filled from this release on (voucherLegacy.ts).
+      --
+      -- Deliberately NOT "REFERENCES machines(id)", matching tickets.machine_id.
+      -- foreign_keys is ON, so an FK here would make every openSession() INSERT
+      -- validate against an oversight table -- and a machines table that was
+      -- missing or locked would stop a guest logging in at the cabinet. Card auth
+      -- must not be able to fail because of a reporting feature.
+      ALTER TABLE sessions ADD COLUMN machine_id TEXT;
+    `
   }
 ]

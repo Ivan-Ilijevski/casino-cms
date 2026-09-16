@@ -21,6 +21,15 @@ export class PushRegistry {
     this.bySid.delete(sid)
   }
 
+  /** The sessions currently held by one connection, for per-machine control. */
+  sidsFor(socket: net.Socket): string[] {
+    const sids: string[] = []
+    for (const [sid, bound] of this.bySid) {
+      if (bound === socket) sids.push(sid)
+    }
+    return sids
+  }
+
   /** Drops every session bound to a connection that has gone away. */
   unbindSocket(socket: net.Socket): void {
     for (const [sid, bound] of this.bySid) {

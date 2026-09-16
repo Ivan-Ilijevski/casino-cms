@@ -16,6 +16,100 @@ export interface StaffAccount {
   created_at: string
 }
 
+/** How a cabinet's TCP link reads right now. Mirrors LinkState on the server. */
+export type LinkState = 'online' | 'silent' | 'offline'
+
+/** One live socket on port 9020, registered to a machine or not yet. */
+export interface TerminalLink {
+  connId: string
+  machineId: string | null
+  host: string | null
+  port: number
+  /** SQLite-shaped UTC ("YYYY-MM-DD HH:MM:SS"), like every other date here. */
+  connectedAt: string
+  lastRxAt: string
+  deviceId: string | null
+  fw: string | null
+  proto: number | null
+  frames: number
+  lastType: string | null
+  state: LinkState
+}
+
+export interface MachinePlayer {
+  sid: string
+  playerId: string
+  name: string
+  openedAt: string
+}
+
+/**
+ * A registered cabinet. `status` is advisory — taking a machine out of service
+ * changes nothing on the wire, it only stops the machine counting as a fault.
+ */
+export interface Machine {
+  id: string
+  label: string
+  device_id: string | null
+  host: string | null
+  location: string | null
+  asset_no: string | null
+  serial: string | null
+  status: 'in_service' | 'out_of_service'
+  notes: string | null
+  fw: string | null
+  proto: number | null
+  first_seen: string | null
+  last_seen: string | null
+  connects: number
+  created_at: string
+  updated_at: string
+  link: TerminalLink | null
+  state: LinkState
+  players: MachinePlayer[]
+}
+
+export interface MachineSession {
+  sid: string
+  opened_at: string
+  last_activity_at: string
+  closed_at: string | null
+  close_reason: string | null
+  player_id: string
+  player_name: string
+}
+
+export interface MachineOrder {
+  id: string
+  number: number
+  pay_method: 'cash' | 'points'
+  total_deni: number
+  total_points: number
+  status: Order['status']
+  created_at: string
+  player_name: string
+}
+
+export interface MachineTicket {
+  id: string
+  amount_deni: number
+  status: 'issued' | 'redeemed' | 'voided' | 'expired'
+  source: string
+  created_at: string
+  redeemed_at: string | null
+  redeemed_by: string | null
+}
+
+export interface MachineInput {
+  label: string
+  host?: string | null
+  device_id?: string | null
+  location?: string | null
+  asset_no?: string | null
+  serial?: string | null
+  notes?: string | null
+}
+
 export interface OrderLine {
   drink_id: number
   name: string
@@ -425,6 +519,23 @@ export const api = {
     post<{ card: Card }>('/cards', { cardUid, playerId, ...(pin ? { pin } : {}) }),
   dismissTap: (cardUid: string) =>
     req<{ ok: true }>(`/unknown-taps/${encodeURIComponent(cardUid)}`, { method: 'DELETE' }),
+
+  machines: () => req<{ machines: Machine[] }>('/machines'),
+  machineLinks: () => req<{ links: TerminalLink[] }>('/machines/links'),
+  machine: (id: string) => req<Machine>(`/machines/${id}`),
+  machineSessions: (id: string) => req<{ sessions: MachineSession[] }>(`/machines/${id}/sessions`),
+  machineOrders: (id: string) => req<{ orders: MachineOrder[] }>(`/machines/${id}/orders`),
+  machineTickets: (id: string) => req<{ tickets: MachineTicket[] }>(`/machines/${id}/tickets`),
+  createMachine: (body: MachineInput) => post<Machine>('/machines', body),
+  /** Host and device id come from the socket, so they cannot be mistyped. */
+  adoptMachine: (connId: string, body: Omit<MachineInput, 'host' | 'device_id'>) =>
+    post<Machine>('/machines/adopt', { connId, ...body }),
+  updateMachine: (id: string, patch: Partial<MachineInput>) =>
+    req<Machine>(`/machines/${id}`, { method: 'PATCH', body: JSON.stringify(patch) }),
+  setMachineStatus: (id: string, status: Machine['status']) =>
+    post<Machine>(`/machines/${id}/status`, { status }),
+  logoutMachine: (id: string) => post<{ ok: true; sessions: number }>(`/machines/${id}/logout`),
+  dropMachineLink: (id: string) => post<{ ok: boolean }>(`/machines/${id}/drop`),
 
   users: () => req<{ users: StaffAccount[] }>('/users'),
   createUser: (body: { username: string; password: string; role: StaffRole }) =>

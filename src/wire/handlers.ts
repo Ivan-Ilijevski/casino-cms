@@ -9,12 +9,21 @@ import { closeSession, getActiveSession, openSession, touchSession, type CloseRe
 import { ERRORS, failure, reply, type InMessage, type OutMessage } from './envelope.js'
 import { MAX_PLAYER_NAME_BYTES, MAX_TXN_LEN, truncateUtf8 } from './limits.js'
 
+/** A terminal connection coming or going, for the staff app's machines feed. */
+export interface MachineLinkEvent {
+  connId: string
+  machineId: string | null
+  state: 'connected' | 'disconnected'
+}
+
 export interface CmsContext {
   db: Db
   pointsPerMkd: number
   currency: string
   /** Notifies the staff app (SSE) that a new order landed. */
   onOrderCreated?: (orderId: string) => void
+  /** Notifies the staff app (SSE) that a machine link changed. */
+  onMachineLink?: (event: MachineLinkEvent) => void
 }
 
 type Handler = (ctx: CmsContext, msg: InMessage) => OutMessage[]

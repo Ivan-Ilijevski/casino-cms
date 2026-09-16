@@ -1,5 +1,6 @@
 import express from 'express'
 import type { Db } from '../db/index.js'
+import { getMachine, resolveMachineByLink } from '../domain/machines.js'
 import {
   denarsToDeni,
   deniToDenars,
@@ -32,6 +33,23 @@ export function createVoucherApp(deps: VoucherAppDeps): express.Express {
   const app = express()
   app.use(express.json())
 
+  /**
+   * Which cabinet this request came from, resolved by remote IP.
+   *
+   * tickets.machine_id has existed since 001 and no caller has ever filled it,
+   * so a cashout could not be attributed to a machine. The slot game reaches
+   * 8080 from the same host that holds its CMS socket on 9020, so the address is
+   * enough to link the two without the game changing at all.
+   *
+   * This is a HINT, not a fact: 8080 has no auth beyond x-api-key on /generate,
+   * so anything on the LAN could cash out from a machine's address. It is used
+   * only to attribute a ticket for staff, never to authorise anything.
+   */
+  const machineFor = (req: express.Request) => {
+    const id = resolveMachineByLink(deps.db, { host: req.socket.remoteAddress })
+    return id ? getMachine(deps.db, id) : undefined
+  }
+
   app.post('/validate', (req, res) => {
     const { id } = req.body ?? {}
     if (!id) {
@@ -39,7 +57,11 @@ export function createVoucherApp(deps: VoucherAppDeps): express.Express {
       return
     }
 
-    const result = redeemTicket(deps.db, String(id), { actor: 'slot-machine' })
+    // Falls back to the legacy literal when the address matches no machine, so
+    // redeemed_by keeps its old meaning on an unregistered floor.
+    const result = redeemTicket(deps.db, String(id), {
+      actor: machineFor(req)?.label ?? 'slot-machine'
+    })
     if (!result.ok) {
       res.status(409).json({ valid: false, credit: 0, reason: 'Already used or invalid' })
       return
@@ -59,6 +81,7 @@ export function createVoucherApp(deps: VoucherAppDeps): express.Express {
         id: String(code),
         amountDeni: denarsToDeni(credit),
         source: 'manual',
+        machineId: machineFor(req)?.id ?? null,
         expiryDays: deps.ticketExpiryDays,
         actor: 'legacy-api'
       })
@@ -86,6 +109,7 @@ export function createVoucherApp(deps: VoucherAppDeps): express.Express {
         id,
         amountDeni: denarsToDeni(credit),
         source: 'cashout',
+        machineId: machineFor(req)?.id ?? null,
         expiryDays: deps.ticketExpiryDays,
         actor: 'slot-machine'
       })

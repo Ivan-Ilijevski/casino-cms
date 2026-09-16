@@ -17,7 +17,12 @@ async function main(): Promise<void> {
       db,
       pointsPerMkd: config.pointsPerMkd,
       currency: config.currency,
-      onOrderCreated: (orderId) => events.emit('order.created', { orderId })
+      onOrderCreated: (orderId) => events.emit('order.created', { orderId }),
+      onMachineLink: ({ connId, machineId, state }) =>
+        events.emit(
+          state === 'connected' ? 'machine.connected' : 'machine.disconnected',
+          { connId, machineId }
+        )
     },
     config.tcpPort
   )

@@ -5,6 +5,7 @@ import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { audit } from '../domain/audit.js'
 import type { StaffDeps } from './deps.js'
+import { machinesRouter } from './routes/machines.js'
 import { menuRouter } from './routes/menu.js'
 import { ordersRouter } from './routes/orders.js'
 import { customersRouter } from './routes/customers.js'
@@ -71,6 +72,7 @@ export function createStaffApp(deps: StaffDeps): express.Express {
   api.use(ticketsRouter(deps))
   api.use(reportsRouter(deps))
   api.use(usersRouter(deps))
+  api.use(machinesRouter(deps))
   app.use('/api', api)
 
   // The built SPA, when present.

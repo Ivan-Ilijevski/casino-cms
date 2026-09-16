@@ -4,6 +4,7 @@ import type { Db } from '../db/index.js'
 import { activeSessionForCard } from '../domain/sessions.js'
 import { balanceOf } from '../domain/ledger.js'
 import type { CmsEvents } from '../events.js'
+import type { TerminalLink } from '../wire/tcpServer.js'
 
 /**
  * Express only infers route-param types for the two-argument overload, so any
@@ -19,6 +20,16 @@ export function param(req: Request, name: string): string {
 export interface Pusher {
   pushBalance(sid: string, balanceDeni: number, points: number): boolean
   pushLogout(sid: string): boolean
+  /**
+   * Live socket state for the machines view. Optional so every existing stub --
+   * and every test app built with no TCP server at all -- still satisfies this
+   * interface; a caller reading `deps.pushes?.listLinks?.() ?? []` degrades to
+   * "registry only, nothing live" instead of throwing.
+   */
+  listLinks?(): TerminalLink[]
+  adoptLink?(connId: string, machineId: string): boolean
+  sidsForLink?(connId: string): string[]
+  dropLink?(connId: string): boolean
 }
 
 export interface StaffDeps {
