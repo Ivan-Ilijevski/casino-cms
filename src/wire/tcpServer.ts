@@ -262,6 +262,10 @@ export class CmsTcpServer {
     return this.pushes.pushBalance(sid, balanceDeni, points)
   }
 
+  pushOrder(sid: string, d: Record<string, unknown>): boolean {
+    return this.pushes.pushOrder(sid, d)
+  }
+
   pushLogout(sid: string): boolean {
     return this.pushes.pushLogout(sid)
   }

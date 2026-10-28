@@ -220,6 +220,11 @@ label {
   display: flex;
   flex-direction: column;
   gap: 26px;
+  /* A phone in landscape can't fit every tab plus the foot; scroll the rail
+     rather than clip the logout button off the bottom. Contained so reaching
+     either end doesn't scroll the page under the drawer. */
+  overflow-y: auto;
+  overscroll-behavior: contain;
 }
 
 .brand {
@@ -2550,6 +2555,822 @@ textarea:focus {
   background: rgba(212, 175, 55, 0.05);
 }
 
+.osint-section-title {
+  font-family: var(--display);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--gold);
+  margin: var(--s5) 0 var(--s3);
+}
+
+.osint-history-line {
+  font-size: 10px;
+  font-weight: 400;
+  letter-spacing: 0.02em;
+}
+
+.osint-variants {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: var(--s4);
+  font-size: 12px;
+}
+
+button.osint-variant {
+  font-family: var(--mono);
+  font-size: 12px;
+  font-weight: 500;
+  padding: 3px 10px;
+  border-radius: 999px;
+  background: var(--surface);
+  color: var(--gold);
+}
+
+/* AI screening */
+
+.osint-ai-launch p {
+  font-size: 13px;
+  max-width: 74ch;
+  margin-bottom: var(--s3);
+}
+
+.osint-engines {
+  flex-wrap: wrap;
+}
+
+.osint-ai-launch .osint-disclose {
+  font-size: 12px;
+  color: var(--ink-soft);
+  border-left: 2px solid var(--amber);
+  padding-left: var(--s3);
+}
+
+.osint-ai-go {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--s3);
+}
+
+.osint-progress {
+  margin-top: var(--s3);
+  border-color: rgba(212, 175, 55, 0.3);
+}
+
+.osint-progress .card-head h3 {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--s2);
+}
+
+.osint-progress-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+  gap: var(--s3);
+}
+
+.osint-progress-engine {
+  border: 1px solid var(--line-soft);
+  border-radius: var(--r);
+  padding: var(--s3);
+  min-width: 0;
+}
+
+.osint-progress-top {
+  display: flex;
+  align-items: center;
+  gap: var(--s2);
+  margin-bottom: var(--s2);
+  font-size: 12px;
+}
+
+.osint-activity {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  max-height: 320px;
+  overflow-y: auto;
+  font-size: 12px;
+  border-top: 1px solid var(--line-soft);
+}
+
+.osint-queries .osint-activity {
+  max-height: 420px;
+  margin: 4px 0 var(--s3);
+}
+
+.osint-activity li {
+  display: grid;
+  grid-template-columns: 38px 16px 1fr;
+  gap: 6px;
+  align-items: baseline;
+  padding: 3px 0;
+  border-bottom: 1px solid var(--line-soft);
+  color: var(--ink-soft);
+  animation: rise 0.25s cubic-bezier(0.2, 0.9, 0.3, 1) backwards;
+}
+
+.osint-act-time {
+  font-size: 10px;
+  color: var(--ink-mute);
+  text-align: right;
+}
+
+.osint-act-glyph {
+  text-align: center;
+  color: var(--ink-mute);
+}
+
+.osint-act-text {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.osint-activity li.act-search .osint-act-text,
+.osint-activity li.act-open .osint-act-text,
+.osint-activity li.act-find .osint-act-text {
+  font-family: var(--mono);
+  font-size: 11px;
+  color: var(--ink);
+}
+
+.osint-activity li.act-search .osint-act-glyph {
+  color: var(--gold-bright);
+}
+
+.osint-activity li.act-fetched .osint-act-glyph,
+.osint-activity li.act-done .osint-act-glyph {
+  color: var(--emerald);
+}
+
+.osint-activity li.act-note .osint-act-text {
+  font-style: italic;
+}
+
+.osint-activity li.act-error {
+  color: #ff9098;
+}
+
+.osint-activity li.act-error .osint-act-glyph {
+  color: var(--crimson);
+  font-weight: 700;
+}
+
+.osint-activity li.osint-activity-pending {
+  color: var(--gold);
+  border-bottom: none;
+  animation: none;
+}
+
+.osint-activity-pending .dot {
+  display: inline-block;
+  background: var(--gold);
+}
+
+.osint-activity li.osint-activity-more {
+  display: block;
+  font-size: 11px;
+  text-align: center;
+}
+
+.osint-failed {
+  margin-top: var(--s3);
+  border-color: rgba(207, 64, 73, 0.4);
+}
+
+.osint-failed p {
+  font-size: 12px;
+  margin: var(--s2) 0;
+}
+
+.osint-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--s2);
+  margin-top: var(--s3);
+}
+
+.osint-report {
+  margin-top: var(--s3);
+}
+
+.osint-verdict {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  border: 1px solid var(--line);
+  border-left: 3px solid var(--ink-mute);
+  background: var(--surface);
+  border-radius: var(--r);
+  padding: var(--s3) var(--s4);
+  margin-bottom: var(--s3);
+}
+
+.osint-verdict strong {
+  font-family: var(--display);
+  font-size: 17px;
+  font-weight: 600;
+}
+
+.osint-verdict-k,
+.osint-summary-k {
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--ink-mute);
+}
+
+.osint-verdict-meta {
+  font-size: 12px;
+  color: var(--ink-soft);
+}
+
+.osint-verdict.v-no_match {
+  border-left-color: var(--emerald);
+}
+.osint-verdict.v-no_match strong {
+  color: var(--emerald);
+}
+.osint-verdict.v-insufficient_data {
+  border-left-color: var(--ink-soft);
+}
+.osint-verdict.v-possible_match {
+  border-left-color: var(--amber);
+  background: rgba(224, 139, 44, 0.07);
+}
+.osint-verdict.v-possible_match strong {
+  color: var(--amber);
+}
+.osint-verdict.v-likely_match {
+  border-left-color: var(--crimson);
+  background: rgba(207, 64, 73, 0.09);
+}
+.osint-verdict.v-likely_match strong {
+  color: #ff9098;
+}
+
+.osint-disagree {
+  font-size: 12px;
+  color: var(--amber);
+  margin-top: 3px;
+}
+
+.osint-summary {
+  margin-bottom: var(--s3);
+}
+
+.osint-summary p {
+  font-size: 13px;
+  line-height: 1.55;
+  max-width: 80ch;
+  margin-top: 2px;
+}
+
+.osint-disclaimer {
+  font-size: 11px;
+  color: var(--ink-mute);
+  font-style: italic;
+  margin: var(--s3) 0;
+  max-width: 80ch;
+}
+
+.osint-finding {
+  background: var(--surface);
+  border: 1px solid var(--line-soft);
+  border-left: 3px solid var(--line);
+  border-radius: var(--r);
+  padding: var(--s3) var(--s4);
+  margin-bottom: var(--s3);
+  animation: rise 0.3s cubic-bezier(0.2, 0.9, 0.3, 1) backwards;
+  animation-delay: calc(var(--i, 0) * 30ms);
+}
+
+.osint-finding.sev-medium {
+  border-left-color: var(--amber);
+}
+.osint-finding.sev-high {
+  border-left-color: var(--crimson);
+}
+
+.osint-finding h4 {
+  font-family: var(--display);
+  font-size: 14px;
+  font-weight: 600;
+  margin: var(--s2) 0 4px;
+}
+
+.osint-finding p {
+  font-size: 13px;
+  line-height: 1.5;
+  max-width: 80ch;
+  margin-bottom: 4px;
+}
+
+.osint-finding-top {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  font-size: 11px;
+}
+
+.tag.sev.sev-medium {
+  color: var(--amber);
+  border-color: rgba(224, 139, 44, 0.45);
+}
+.tag.sev.sev-high {
+  color: #ff9098;
+  border-color: rgba(207, 64, 73, 0.5);
+}
+
+.osint-corr {
+  margin-left: auto;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--ink-mute);
+}
+
+.osint-corr.yes {
+  color: var(--emerald);
+}
+
+.osint-finding .osint-basis {
+  font-size: 12px;
+}
+
+.osint-sources {
+  list-style: none;
+  margin: var(--s2) 0 0;
+  padding: 0;
+  font-size: 12px;
+}
+
+.osint-sources li {
+  padding: 3px 0;
+  overflow-wrap: anywhere;
+}
+
+.osint-sources a {
+  color: var(--gold-bright);
+}
+
+.osint-limits {
+  font-size: 12px;
+  max-width: 80ch;
+  margin-top: var(--s2);
+}
+
+.osint-queries {
+  margin-top: var(--s3);
+  font-size: 12px;
+}
+
+.osint-queries summary {
+  cursor: pointer;
+  color: var(--ink-soft);
+}
+
+.osint-queries ol {
+  font-size: 11px;
+  color: var(--ink-soft);
+  margin: 4px 0 var(--s3);
+  padding-left: 22px;
+  overflow-wrap: anywhere;
+}
+
+.osint-tags {
+  margin-top: var(--s3);
+}
+
+.osint-tags h4 {
+  font-family: var(--display);
+  font-size: 13px;
+  margin-bottom: 2px;
+}
+
+.osint-tags > p {
+  font-size: 12px;
+  margin-bottom: var(--s2);
+}
+
+.osint-tag-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--s3);
+  padding: var(--s2) 0;
+  border-top: 1px solid var(--line-soft);
+}
+
+.osint-tag-why {
+  flex: 1;
+  min-width: 200px;
+  font-size: 12px;
+}
+
+.osint-history {
+  margin-top: var(--s4);
+}
+
+.osint-history ul {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+button.osint-run-row {
+  display: grid;
+  grid-template-columns: 130px 120px 1fr auto;
+  align-items: center;
+  gap: var(--s3);
+  width: 100%;
+  text-align: left;
+  font-size: 12px;
+  font-weight: 400;
+  background: var(--surface);
+  border: 1px solid var(--line-soft);
+  margin-bottom: 4px;
+}
+
+button.osint-run-row.on {
+  border-color: var(--gold);
+  background: var(--gold-dim);
+}
+
+.osint-run-verdict {
+  font-weight: 600;
+  color: var(--ink-soft);
+}
+.osint-run-verdict.v-no_match {
+  color: var(--emerald);
+}
+.osint-run-verdict.v-possible_match {
+  color: var(--amber);
+}
+.osint-run-verdict.v-likely_match,
+.osint-run-verdict.v-failed {
+  color: #ff9098;
+}
+.osint-run-verdict.v-running {
+  color: var(--gold-bright);
+}
+
+@media (max-width: 720px) {
+  button.osint-run-row {
+    grid-template-columns: 1fr auto;
+  }
+}
+
+/* General profile: photos, accounts, face comparison */
+
+.osint-print-url {
+  display: none;
+}
+
+.osint-profile-section {
+  margin-bottom: var(--s4);
+}
+
+.osint-gallery {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
+  gap: var(--s3);
+}
+
+.osint-photo {
+  margin: 0;
+  background: var(--surface);
+  border: 1px solid var(--line-soft);
+  border-radius: var(--r);
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+}
+
+.osint-photo.face-match {
+  border-color: rgba(58, 160, 111, 0.6);
+}
+.osint-photo.face-possible {
+  border-color: rgba(224, 139, 44, 0.55);
+}
+.osint-photo.face-different {
+  opacity: 0.72;
+}
+
+.osint-photo-frame {
+  position: relative;
+  aspect-ratio: 1 / 1;
+  max-width: 100%;
+  background: var(--void);
+}
+
+.osint-photo-frame img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+
+.osint-face-badge {
+  position: absolute;
+  left: 6px;
+  bottom: 6px;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  padding: 2px 7px;
+  border-radius: 999px;
+  background: rgba(10, 9, 8, 0.82);
+  border: 1px solid var(--line);
+  color: var(--ink-soft);
+}
+.osint-face-badge.face-match {
+  color: var(--emerald);
+  border-color: rgba(58, 160, 111, 0.6);
+}
+.osint-face-badge.face-possible {
+  color: var(--amber);
+  border-color: rgba(224, 139, 44, 0.55);
+}
+.osint-face-badge.face-different {
+  color: #ff9098;
+  border-color: rgba(207, 64, 73, 0.55);
+}
+
+button.osint-photo-x {
+  position: absolute;
+  top: 6px;
+  right: 6px;
+  padding: 2px 7px;
+  font-size: 11px;
+  background: rgba(10, 9, 8, 0.8);
+  border-color: var(--line);
+}
+
+button.osint-photo-x:hover:not(:disabled) {
+  border-color: var(--crimson);
+  color: #ff8b91;
+}
+
+.osint-photo figcaption {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  padding: var(--s2) var(--s3) var(--s3);
+  font-size: 11px;
+  overflow-wrap: anywhere;
+}
+
+.osint-photo-desc {
+  font-size: 12px;
+  color: var(--ink);
+}
+
+.osint-photo figcaption a {
+  color: var(--gold-bright);
+}
+
+.osint-face-bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--s2) var(--s3);
+  font-size: 12px;
+  margin-bottom: var(--s3);
+}
+
+.osint-face-bar .dot {
+  display: inline-block;
+  margin-right: 4px;
+}
+
+.osint-accounts {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.osint-accounts li {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 4px var(--s3);
+  padding: var(--s2) 0;
+  border-top: 1px solid var(--line-soft);
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
+
+.osint-account-platform {
+  font-family: var(--display);
+  font-size: 11px;
+  font-weight: 600;
+  min-width: 90px;
+}
+
+.osint-accounts a {
+  color: var(--gold-bright);
+  font-weight: 600;
+}
+
+.osint-account-basis {
+  flex-basis: 100%;
+  font-size: 11px;
+}
+
+.osint-guest-photo {
+  margin-top: var(--s3);
+}
+
+.osint-guest-photo-body {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--s4);
+  align-items: flex-start;
+}
+
+.osint-guest-photo-img {
+  width: 96px;
+  height: 96px;
+  max-width: 100%;
+  object-fit: cover;
+  border-radius: var(--r);
+  border: 1px solid var(--line);
+}
+
+.osint-guest-photo-text {
+  flex: 1;
+  min-width: 220px;
+}
+
+.osint-guest-photo-text h4 {
+  font-family: var(--display);
+  font-size: 13px;
+  margin-bottom: 4px;
+}
+
+.osint-guest-photo-text p {
+  font-size: 12px;
+  margin-bottom: 4px;
+  max-width: 70ch;
+}
+
+.osint-guest-photo-form {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s2);
+  margin-top: var(--s3);
+  font-size: 12px;
+}
+
+.osint-consent {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--s2);
+  max-width: 70ch;
+  line-height: 1.45;
+  cursor: pointer;
+}
+
+.osint-consent input {
+  margin-top: 2px;
+  flex-shrink: 0;
+}
+
+/*
+ * A report is printed from a copy rendered straight into <body> (OsintReport.tsx),
+ * so printing can drop the entire app without this stylesheet knowing its shape.
+ */
+.osint-print-portal {
+  display: none;
+}
+
+@media print {
+  body > *:not(.osint-print-portal) {
+    display: none !important;
+  }
+
+  html,
+  body {
+    background: #fff !important;
+  }
+
+  body > .osint-print-portal {
+    display: block;
+    color: #111;
+    font-family: var(--body);
+    font-size: 11pt;
+    padding: 0;
+  }
+
+  .osint-print-portal * {
+    color: #111 !important;
+    background: transparent !important;
+    box-shadow: none !important;
+    animation: none !important;
+  }
+
+  .osint-print-head {
+    border-bottom: 2px solid #111;
+    padding-bottom: 8pt;
+    margin-bottom: 12pt;
+  }
+
+  .osint-print-head h1 {
+    font-size: 15pt;
+    margin: 0 0 6pt;
+  }
+
+  .osint-print-head dl {
+    display: grid;
+    grid-template-columns: max-content 1fr;
+    gap: 2pt 12pt;
+    margin: 0;
+    font-size: 10pt;
+  }
+
+  .osint-print-head dt {
+    font-weight: 700;
+  }
+
+  .osint-print-head dd {
+    margin: 0;
+  }
+
+  .osint-print-portal .osint-verdict,
+  .osint-print-portal .osint-finding,
+  .osint-print-portal .banner {
+    border: 1px solid #888 !important;
+    border-left-width: 3pt !important;
+    page-break-inside: avoid;
+    break-inside: avoid;
+  }
+
+  .osint-print-portal .tag {
+    border: 1px solid #888 !important;
+  }
+
+  .osint-print-portal a {
+    text-decoration: none;
+    font-weight: 600;
+  }
+
+  .osint-print-portal .osint-print-url {
+    display: block;
+    font-size: 8pt;
+    overflow-wrap: anywhere;
+  }
+
+  .osint-print-portal .osint-gallery {
+    grid-template-columns: repeat(3, 1fr);
+    gap: 8pt;
+  }
+
+  .osint-print-portal .osint-photo {
+    border: 1px solid #888 !important;
+    page-break-inside: avoid;
+    break-inside: avoid;
+    opacity: 1;
+  }
+
+  .osint-print-portal .osint-photo-frame {
+    aspect-ratio: auto;
+  }
+
+  .osint-print-portal .osint-photo-frame img {
+    height: auto;
+    max-height: 6cm;
+    object-fit: contain;
+  }
+
+  .osint-print-portal .osint-face-badge {
+    position: static;
+    display: inline-block;
+    margin: 3pt;
+    border: 1px solid #888 !important;
+  }
+
+  .osint-print-portal .osint-accounts li {
+    border-top: 1px solid #ccc;
+    break-inside: avoid;
+  }
+
+  .osint-print-foot {
+    margin-top: 16pt;
+    padding-top: 6pt;
+    border-top: 1px solid #888;
+    font-size: 8.5pt;
+  }
+}
+
 .details {
   font-size: 11px;
   max-width: 320px;
@@ -3266,4 +4087,121 @@ textarea:focus {
   .m-state.online .m-dot {
     animation: none;
   }
+}
+
+/* ------------------------------------------------------------ receipts */
+
+/* A text-weight action inside a hint line, where a full button would shout louder
+   than the sentence it belongs to. */
+button.link-btn {
+  background: none;
+  border: none;
+  border-bottom: 1px solid var(--line);
+  border-radius: 0;
+  padding: 0;
+  font-size: inherit;
+  color: var(--gold-bright);
+}
+
+button.link-btn:hover:not(:disabled) {
+  background: none;
+  border-color: var(--gold);
+}
+
+/* The till's reminder that a receipt was left behind. A link, so it reads as the
+   way to the fix rather than as an error about the sale in progress. */
+a.pos-unsent {
+  display: block;
+  text-decoration: none;
+}
+
+a.pos-unsent:hover {
+  border-color: rgba(224, 139, 44, 0.6);
+}
+
+.receipts-table tbody tr {
+  cursor: pointer;
+}
+
+.receipts-table tbody tr.on {
+  background: var(--gold-dim);
+}
+
+.receipts-table td .tag + .tag {
+  margin-left: var(--s1);
+}
+
+.tag.receipt-copies {
+  color: var(--violet);
+  border-color: rgba(155, 142, 222, 0.4);
+}
+
+/* A status like "прекината 42%" is one fact; it must not break across two lines. */
+.receipt-detail .card-head .tag,
+.receipt-log .tag,
+.receipts-table .tag {
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+
+/* Stays in view while the list scrolls past it on a wide screen. */
+.receipt-detail {
+  position: sticky;
+  top: var(--s4);
+}
+
+@media (max-width: 900px) {
+  .receipt-detail {
+    position: static;
+  }
+}
+
+/* The render is black on white and exactly the printer's width; pixelated keeps a
+   downscaled preview from blurring the type the printer will print crisp. */
+.receipt-preview {
+  display: block;
+  width: 100%;
+  max-width: 384px;
+  margin: 0 auto;
+  background: #fff;
+  border-radius: var(--r);
+  image-rendering: pixelated;
+}
+
+.receipt-lines td {
+  padding: 6px 4px;
+  font-size: 13px;
+}
+
+.receipt-log-title {
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.11em;
+  text-transform: uppercase;
+  color: var(--ink-mute);
+  margin-bottom: var(--s2);
+}
+
+.receipt-log {
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: var(--s2);
+}
+
+.receipt-log li {
+  padding: var(--s2) 0;
+  border-bottom: 1px solid var(--line-soft);
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.receipt-log li:last-child {
+  border-bottom: none;
+}
+
+.receipt-log-error {
+  font-size: 12px;
+  color: #ff9098;
 }

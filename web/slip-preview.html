@@ -1,0 +1,67 @@
+<!doctype html>
+<html lang="mk">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Slip preview</title>
+    <!--
+      Dev-only: `npm run dev:web`, then open /slip-preview.html. Not a page of the app —
+      vite build only bundles index.html, so this never ships. Each slip is the exact
+      PNG paymentSlip.ts hands the printer, on a 57mm roll; saving that file reloads the page.
+    -->
+    <style>
+      body {
+        margin: 0;
+        padding: 24px 16px;
+        background: #3a3a3a;
+        color: #eee;
+        font: 14px system-ui, sans-serif;
+      }
+      #slips {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 32px;
+        align-items: flex-start;
+      }
+      figure {
+        margin: 0;
+      }
+      figcaption {
+        margin-bottom: 8px;
+      }
+      figcaption small {
+        display: block;
+        color: #aaa;
+      }
+      /*
+        The roll is 57mm, but the X5's head is 384 dots at 8 dots/mm — 48mm — so every
+        slip prints as a 48mm strip with about 4.5mm of bare paper either side. The
+        paper here is 57mm at the same scale, one printer dot per CSS pixel, unsmoothed.
+      */
+      .paper {
+        box-sizing: border-box;
+        width: 456px;
+        display: flex;
+        justify-content: center;
+        background: #fff;
+        box-shadow: 0 4px 16px rgb(0 0 0 / 0.5);
+      }
+      img {
+        display: block;
+        image-rendering: pixelated;
+      }
+      .zoom .paper {
+        zoom: 2;
+      }
+      .error {
+        color: #ff8a80;
+        white-space: pre-wrap;
+      }
+    </style>
+  </head>
+  <body>
+    <label><input type="checkbox" id="zoom" /> 2×</label>
+    <div id="slips"></div>
+    <script type="module" src="/src/slipPreview.ts"></script>
+  </body>
+</html>

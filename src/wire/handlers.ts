@@ -4,7 +4,14 @@ import { creditCard } from '../domain/credits.js'
 import { commitHold, placeHold, rollbackHold } from '../domain/holds.js'
 import { balanceOf } from '../domain/ledger.js'
 import { wireMenu } from '../domain/menu.js'
-import { placeOrder, type PayMethod } from '../domain/orders.js'
+import {
+  activeOrdersForCard,
+  etaForOrder,
+  getOrder,
+  placeOrder,
+  type OrderRow,
+  type PayMethod
+} from '../domain/orders.js'
 import { closeSession, getActiveSession, openSession, touchSession, type CloseReason } from '../domain/sessions.js'
 import { ERRORS, failure, reply, type InMessage, type OutMessage } from './envelope.js'
 import { MAX_PLAYER_NAME_BYTES, MAX_TXN_LEN, truncateUtf8 } from './limits.js'
@@ -179,6 +186,49 @@ const credit_req: Handler = (ctx, msg) => {
 
 const menu_req: Handler = (ctx, msg) => [reply('menu_res', msg.id, { items: wireMenu(ctx.db) })]
 
+/**
+ * The order fields the terminal's countdown ring reads.
+ *
+ * One builder for all three carriers -- order_res, order_push and the resync
+ * replay -- because three hand-written copies of this shape would drift, and
+ * the firmware matches every key by exact name.
+ *
+ * The order UUID rides along for log correlation only; the firmware identifies
+ * an order by `num` and never sends one back.
+ */
+export function orderPushData(db: Db, order: OrderRow): Record<string, any> {
+  return {
+    order: order.id,
+    num: order.number,
+    status: order.status,
+    ...(etaForOrder(db, order) ?? {})
+  }
+}
+
+/**
+ * Everything still coming for this card, as a count followed by one order_push
+ * per order. An array would mean array parsing in C for no gain; this way the
+ * firmware has exactly one order shape to read, and the same one a live push
+ * uses.
+ *
+ * Answers the terminal's resync after an auth or a reconnect, which is how an
+ * order outlives a terminal reboot -- nothing about it is stored on the board.
+ */
+const orders_req: Handler = (ctx, msg) => {
+  const cardId = cardForSession(ctx, msg.d.sid)
+  if (!cardId) return [failure('orders_res', msg.id, ERRORS.no_session)]
+
+  const sid = msg.d.sid as string
+  const orders = activeOrdersForCard(ctx.db, cardId)
+  return [
+    reply('orders_res', msg.id, { n: orders.length }),
+    ...orders.map((order) => ({
+      t: 'order_push',
+      id: 0,
+      d: { ok: true, sid, ...orderPushData(ctx.db, order) }
+    }))
+  ]
+}
 const order_req: Handler = (ctx, msg) => {
   const cardId = cardForSession(ctx, msg.d.sid)
   if (!cardId) return [failure('order_res', msg.id, ERRORS.no_session)]
@@ -206,7 +256,16 @@ const order_req: Handler = (ctx, msg) => {
   }
 
   ctx.onOrderCreated?.(res.orderId)
-  return [reply('order_res', msg.id, { order: res.orderId, balance: res.balanceDeni, points: res.points })]
+  // The estimate goes back with the reply, so the ring starts counting the
+  // moment the order lands instead of waiting for the bar to accept.
+  const placed = getOrder(ctx.db, res.orderId)!
+  return [
+    reply('order_res', msg.id, {
+      balance: res.balanceDeni,
+      points: res.points,
+      ...orderPushData(ctx.db, placed)
+    })
+  ]
 }
 
 const HANDLERS: Record<string, Handler> = {
@@ -219,7 +278,8 @@ const HANDLERS: Record<string, Handler> = {
   debit_rollback,
   credit_req,
   menu_req,
-  order_req
+  order_req,
+  orders_req
 }
 
 /** Returns the replies to send. An unknown type is ignored, never fatal. */

@@ -294,41 +294,7 @@ export function customersRouter(deps: StaffDeps): Router {
     res.json({ tags: tagsFor(deps.db, playerId) })
   })
 
-  /**
-   * Records that a staff member opened a public source about this guest.
-   *
-   * The server FETCHES NOTHING. The OSINT panel is a link launcher: the browser
-   * opens the source directly. All this endpoint does is make the lookup
-   * accountable — who ran it, on whom, against which source, and why — which is
-   * the whole reason the panel is allowed to exist. The client calls this and
-   * only navigates once it succeeds, so there is no unlogged path.
-   */
-  const OSINT_REASONS = ['kyc', 'aml', 'self_exclusion', 'dispute', 'other']
-
-  router.post('/customers/:id/osint-lookup', requireRole('admin'), (req, res) => {
-    const player = getPlayer(deps.db, param(req, 'id'))
-    if (!player) {
-      res.status(404).json({ error: 'no such guest' })
-      return
-    }
-    const { source, reason } = req.body ?? {}
-    if (typeof source !== 'string' || source.trim() === '') {
-      res.status(400).json({ error: 'source is required' })
-      return
-    }
-    if (!OSINT_REASONS.includes(reason)) {
-      res.status(400).json({ error: `reason must be one of ${OSINT_REASONS.join(', ')}` })
-      return
-    }
-    audit(deps.db, {
-      actor: req.staff!.username,
-      action: 'osint.lookup',
-      entityType: 'player',
-      entityId: player.id,
-      details: { source: source.trim().slice(0, 64), reason }
-    })
-    res.json({ ok: true })
-  })
+  // The OSINT endpoints (link lookups and AI screening) live in routes/osint.ts.
 
   return router
 }

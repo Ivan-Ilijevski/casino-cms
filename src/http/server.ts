@@ -6,8 +6,10 @@ import { fileURLToPath } from 'node:url'
 import { audit } from '../domain/audit.js'
 import type { StaffDeps } from './deps.js'
 import { machinesRouter } from './routes/machines.js'
+import { osintRouter } from './routes/osint.js'
 import { menuRouter } from './routes/menu.js'
 import { ordersRouter } from './routes/orders.js'
+import { receiptsRouter } from './routes/receipts.js'
 import { customersRouter } from './routes/customers.js'
 import { playersRouter } from './routes/players.js'
 import { posRouter } from './routes/pos.js'
@@ -68,11 +70,13 @@ export function createStaffApp(deps: StaffDeps): express.Express {
   api.use(menuRouter(deps))
   api.use(playersRouter(deps))
   api.use(customersRouter(deps))
+  api.use(osintRouter(deps))
   api.use(posRouter(deps))
   api.use(ticketsRouter(deps))
   api.use(reportsRouter(deps))
   api.use(usersRouter(deps))
   api.use(machinesRouter(deps))
+  api.use(receiptsRouter(deps))
   app.use('/api', api)
 
   // The built SPA, when present.

@@ -1,14 +1,19 @@
 import { Fragment, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react'
-import { api, mkd, type MenuItem, type PosDirection, type PosIntentResponse } from '../api'
+import { Link } from 'react-router-dom'
+import { api, mkd, type MenuItem, type PaymentSlip, type PosDirection, type PosIntentResponse } from '../api'
 import { Dialog } from '../components/Dialog'
 import { useIsMobile } from '../media'
+import { paymentSlipPng, warmPaymentSlip } from '../paymentSlip'
 import {
   describePrinterError,
   PrinterJobError,
   printerState,
   printPng,
-  subscribePrinter
+  reconnectPrinter,
+  subscribePrinter,
+  type PrinterStatus
 } from '../printer'
+import { printReceipt as sendReceipt } from '../receiptPrint'
 import { checkNfcSupport, NfcScanError, readCardUid } from '../webnfc'
 import contactlessSvg from '../assets/Universal_Contactless_Card_Symbol.svg'
 import logoCheck from '../assets/logo-check.gif'
@@ -17,27 +22,53 @@ type Stage = 'cart' | 'tap' | 'pin' | 'done' | 'failed'
 type PosMode = 'bar' | 'charge'
 
 /**
- * 'working' covers the whole stretch before the receipt is on paper: the render
+ * What one sale puts on paper: the guest's card slip, with the fiscal receipt under it
+ * when there is one. The slip is never kept (see paymentSlip.ts), so it lives only here.
+ */
+interface PrintJob {
+  slip: PaymentSlip
+  /**
+   * The fiscal render, or null when the slip goes out alone — a Наплата/Исплата, a bar
+   * sale with the fiscal box unticked, or one whose render failed.
+   */
+  blob: Blob | null
+  /** The daily fiscal number the server put on the paper, once it has one. */
+  number: string | null
+  /** The receipts row, so each attempt at printing it is logged against it. */
+  receiptId: number | null
+}
+
+/**
+ * 'working' covers the whole stretch before the job is on paper: the render
  * call in flight, then the Bluetooth transfer — whose progress lives in the
  * printer store, not here. 'manual' no longer means "the share sheet didn't
  * open"; it means the image is ready but it is NOT on paper, either because
  * nothing is paired or because the transfer failed. Those two need different
  * copy, so the reason travels in `message` rather than in a second status —
- * one branch in the done screen stays easier to read than two. The fetched
- * `blob` is kept with it so the retry button re-sends the same image instead of
- * hitting the render API again. 'error' means the render call itself failed and
- * there is nothing to retry with.
+ * one branch in the done screen stays easier to read than two. The `job` is kept
+ * with it so the retry button re-sends the same images instead of hitting the
+ * render API again.
+ *
+ * A fiscal receipt left in 'manual' is not lost when the operator moves on: the server
+ * holds the image and the print log, and the cart screen points at Сметки. The slip
+ * is — it was only ever for the guest standing there.
  */
-type ReceiptStatus = 'idle' | 'working' | 'manual' | 'error'
+type ReceiptStatus = 'idle' | 'working' | 'manual'
 interface ReceiptState {
   status: ReceiptStatus
-  blob: Blob | null
+  job: PrintJob | null
   /** Macedonian explanation shown for 'manual'; null for every other status. */
   message: string | null
-  /** The daily fiscal number the server put on the paper, once it has one. */
-  number: string | null
+  /**
+   * The fiscal render failed, so the slip went out alone. Kept apart from the job so
+   * the done screen still says so after the slip has been sent.
+   */
+  fiscalFailed: boolean
 }
-const RECEIPT_IDLE: ReceiptState = { status: 'idle', blob: null, message: null, number: null }
+const RECEIPT_IDLE: ReceiptState = { status: 'idle', job: null, message: null, fiscalFailed: false }
+
+/** A printer is paired — it may be busy, reconnecting or given up on, but a job can wait for it. */
+const PAIRED: PrinterStatus[] = ['ready', 'printing', 'reconnecting', 'offline']
 
 interface Quote {
   intentId: string
@@ -70,20 +101,28 @@ const mkError = (code?: string, fallback = 'Настана грешка.') =>
 
 /**
  * Why the receipt is not on paper, in one sentence the operator can act on.
- * Both PrinterJobError kinds send them to the same place — Поставки — but for
- * different reasons: nothing was ever paired, or the transfer failed and
- * printer.ts tore the link down on purpose (a half-written job must not be
- * repeated on the same connection), so even the retry needs a fresh pairing
- * first. describePrinterError already names the cause in Macedonian; this only
- * adds where to go next.
+ *
+ * A failed or cut-off transfer no longer means a trip to Поставки: printer.ts keeps
+ * the paired printer and reconnects to it by itself, so the only thing left for the
+ * operator is the paper. A receipt that stopped part way has a stub hanging out of
+ * the printer, and nothing re-sends it on its own — whether to print it again is
+ * theirs to decide, once that stub is torn off.
+ *
+ * A slip on its own is a „потврда“, not a „сметка“ — both feminine, so only the noun changes.
  */
-function notPrintedMk(err: unknown): string {
+function notPrintedMk(err: unknown, slipOnly: boolean): string {
   const cause = describePrinterError(err)
-  if (err instanceof PrinterJobError && err.kind === 'not-connected') {
-    return `${cause} Сметката е подготвена и чека да биде пратена.`
-  }
-  if (err instanceof PrinterJobError && err.kind === 'transfer-failed') {
-    return `${cause} Спарете го печатачот повторно во Поставки, па пратете ја сметката одново.`
+  const noun = slipOnly ? 'потврда' : 'сметка'
+  if (err instanceof PrinterJobError) {
+    switch (err.kind) {
+      case 'link-lost':
+        return `Печатачот се исклучи при испраќањето (${err.percent}%). Откинете ја прекинатата ${noun} — штом печатачот се поврзе, пратете ја повторно.`
+      case 'transfer-failed':
+        return `${cause} Откинете го она што излегло и пратете ја ${noun}та повторно.`
+      case 'not-connected':
+      case 'busy':
+        return `${cause} ${slipOnly ? 'Потврдата' : 'Сметката'} е подготвена и чека да биде пратена.`
+    }
   }
   return cause
 }
@@ -116,12 +155,31 @@ export function Pos({ onExit }: { onExit: () => void }) {
   // printer.ts), so pairing state is read from its store, not from React state.
   const printerLive = useSyncExternalStore(subscribePrinter, printerState)
 
+  // Today's receipts that never made it to the printer — including ones the operator
+  // walked away from on a done screen. Refreshed whenever the cart comes back.
+  const [unsent, setUnsent] = useState(0)
+
   const support = useMemo(() => checkNfcSupport(), [])
 
   useEffect(() => {
     void api.menu().then((m) => setMenu(m.items.filter((i) => i.available)))
+    // The slip's logo is loaded before the first sale needs it, not during it.
+    warmPaymentSlip()
     return () => abort.current?.abort()
   }, [])
+
+  useEffect(() => {
+    if (stage !== 'cart') return
+    let live = true
+    api
+      .receipts({ unprinted: true })
+      .then((rows) => live && setUnsent(rows.length))
+      // A banner is not worth an error on the till; it just stays as it was.
+      .catch(() => {})
+    return () => {
+      live = false
+    }
+  }, [stage])
 
   const items = Object.entries(cart)
     .filter(([, qty]) => qty > 0)
@@ -175,7 +233,7 @@ export function Pos({ onExit }: { onExit: () => void }) {
 
   /**
    * The success screen auto-clears after a few seconds — except while a
-   * fiscal receipt is still being prepared or waiting on a manual retry tap,
+   * slip or fiscal receipt is still being prepared or waiting on a manual retry tap,
    * where clearing it under the bartender's thumb would be worse than a
    * slightly longer pause.
    */
@@ -237,25 +295,28 @@ export function Pos({ onExit }: { onExit: () => void }) {
   }
 
   /**
-   * Sends an already-rendered receipt to the paired printer. Shared by the
-   * automatic attempt and by the retry button, so a retry re-sends the same
-   * blob and the render API is never hit twice for one sale.
+   * Sends a sale's slip — and its fiscal receipt, when it has one — to the paired
+   * printer. Shared by the automatic attempt and by the retry button, so a retry
+   * re-sends the same images and the render API is never hit twice for one sale.
    *
-   * Deliberately never retries by itself: printPng drops the connection after a
-   * failed transfer, so another attempt is only meaningful once the operator has
-   * paired again — a decision that belongs to them, not to a timer.
+   * Deliberately never retries by itself: a failed transfer may have left part of
+   * the receipt on paper, so another attempt waits for the operator's tap — the
+   * printer reconnecting in the background only makes that tap possible.
+   *
+   * A slip on its own goes straight to printPng: it has no receipts row to log against.
    */
-  async function sendToPrinter(blob: Blob, number: string | null) {
+  async function sendToPrinter(job: PrintJob) {
     holdReset()
-    setReceipt({ status: 'working', blob, message: null, number })
+    setReceipt((r) => ({ ...r, status: 'working', job, message: null }))
     try {
-      await printPng(blob)
+      if (job.blob) await sendReceipt(job.receiptId, job.blob, { slip: job.slip })
+      else await printPng(await paymentSlipPng(job.slip))
       // Resolved means the last byte left the tablet, not that paper came out —
       // so nothing here claims the receipt was printed.
-      setReceipt(RECEIPT_IDLE)
+      setReceipt((r) => ({ ...RECEIPT_IDLE, fiscalFailed: r.fiscalFailed }))
       scheduleReset()
     } catch (e) {
-      setReceipt({ status: 'manual', blob, message: notPrintedMk(e), number })
+      setReceipt((r) => ({ ...r, status: 'manual', job, message: notPrintedMk(e, !job.blob) }))
     }
   }
 
@@ -263,35 +324,27 @@ export function Pos({ onExit }: { onExit: () => void }) {
    * Fires after a bar-mode payment succeeds. Non-blocking on purpose — the
    * "done" screen is already showing, this just fills in the print status on
    * top of it. Renders the fiscal receipt server-side, then hands the PNG
-   * straight to the paired Bluetooth printer. Pairing never happens from here:
-   * Chrome's device chooser needs a live gesture and must not interrupt a sale,
-   * so it lives in Поставки and this path only ever finds a printer or doesn't.
+   * straight to the paired Bluetooth printer with the slip above it. Pairing never
+   * happens from here: Chrome's device chooser needs a live gesture and must not
+   * interrupt a sale, so it lives in Поставки and this path only ever finds a printer
+   * or doesn't.
    */
-  async function tryPrintReceipt(orderId: string) {
+  async function tryPrintReceipt(orderId: string, slip: PaymentSlip) {
     holdReset()
-    setReceipt({ status: 'working', blob: null, message: null, number: null })
-    let rendered: { blob: Blob; number: string | null }
+    setReceipt({ ...RECEIPT_IDLE, status: 'working' })
+    let rendered: { blob: Blob; number: string | null; receiptId: number | null }
     try {
-      const lines = items.map((i) => {
-        const m = menu.find((x) => x.drink_id === i.drink)!
-        return {
-          name: m.name,
-          quantity: i.qty,
-          price: m.price_deni / 100,
-          vatType: m.vat_type,
-          isDomestic: m.is_domestic === 1
-        }
-      })
-      // The sale, not the cart, is what gets a fiscal number — so a reprint of the
-      // same order reuses its number rather than consuming the next one.
-      rendered = await api.receiptImage(lines, pay, orderId)
+      // The sale, not the cart, is what gets a fiscal number and what the lines are
+      // read from — so a second request for the same order returns the same document.
+      rendered = await api.receiptImage(pay, orderId)
     } catch {
-      // The image itself could not be rendered, so there is no blob to retry with.
-      setReceipt({ status: 'error', blob: null, message: null, number: null })
-      scheduleReset()
+      // No fiscal receipt to print — but the card was charged, so the guest still
+      // gets the slip as proof of it.
+      setReceipt({ ...RECEIPT_IDLE, status: 'working', fiscalFailed: true })
+      await sendToPrinter({ slip, blob: null, number: null, receiptId: null })
       return
     }
-    await sendToPrinter(rendered.blob, rendered.number)
+    await sendToPrinter({ slip, ...rendered })
   }
 
   async function charge(intentId: string, withPin?: string) {
@@ -307,17 +360,24 @@ export function Pos({ onExit }: { onExit: () => void }) {
         return
       }
       setStage('done')
-      // mode === 'bar' already implies an order — a pos credit never reaches here —
-      // so res.orderId only narrows the type and states the invariant out loud.
+      // The print path owns the auto-clear from here. Arming it alongside would
+      // re-arm the timer that tryPrintReceipt/sendToPrinter just held: `void` only
+      // runs them up to their first await, so this line would land after their
+      // holdReset() and a render slower than 3.5s would wipe the done screen
+      // mid-flight — taking the retry button, the only remaining road to paper,
+      // with it. They re-arm scheduleReset() on every outcome that ends.
+      //
+      // mode === 'bar' already implies an order — a pos credit never reaches the first
+      // branch — so res.orderId only narrows the type and states the invariant out loud.
       if (printReceipt && mode === 'bar' && res.orderId) {
-        // The receipt path owns the auto-clear from here. Arming it alongside
-        // would re-arm the timer that tryPrintReceipt just held: `void` only
-        // runs it up to its first await, so this line would land after its
-        // holdReset() and a render slower than 3.5s would wipe the done screen
-        // mid-flight — taking the retry button, the only remaining road to
-        // paper, with it. It re-arms scheduleReset() on every outcome that ends.
-        void tryPrintReceipt(res.orderId)
+        void tryPrintReceipt(res.orderId, res.slip)
+      } else if (PAIRED.includes(printerState().status)) {
+        // Every card payment gets its slip, even with no fiscal receipt to go under it.
+        void sendToPrinter({ slip: res.slip, blob: null, number: null, receiptId: null })
       } else {
+        // Nothing paired: the slip is not a document the sale owes, so it is not
+        // worth holding the till on a retry button that cannot work. The cart
+        // screen already said nothing would reach paper.
         setReceipt(RECEIPT_IDLE)
         scheduleReset()
       }
@@ -367,6 +427,8 @@ export function Pos({ onExit }: { onExit: () => void }) {
   // ------------------------------------------------------------------- done
   if (stage === 'done' && quote) {
     const isCredit = quote.direction === 'credit'
+    const job = receipt.job
+    const slipOnly = job !== null && job.blob === null
     return (
       <div className="pos-screen light">
         <div className="pos-result ok">
@@ -393,32 +455,50 @@ export function Pos({ onExit }: { onExit: () => void }) {
           {receipt.status === 'working' && (
             <p className="muted" style={{ fontSize: 13 }}>
               {printerLive.status === 'printing'
-                ? `Сметката се испраќа кон печатачот… ${printerLive.percent}%`
-                : 'Подготвување фискална сметка…'}
+                ? `${slipOnly ? 'Потврдата' : 'Сметката'} се испраќа кон печатачот… ${printerLive.percent}%`
+                : slipOnly
+                  ? 'Подготвување потврда за плаќање…'
+                  : 'Подготвување фискална сметка…'}
             </p>
           )}
-          {receipt.status === 'error' && (
+          {receipt.fiscalFailed && (
             <p className="muted" style={{ fontSize: 13 }}>
               Фискалната сметка не можеше да се подготви.
             </p>
           )}
-          {receipt.number && receipt.status !== 'error' && (
+          {job?.number && (
             <p className="muted" style={{ fontSize: 13 }}>
-              Фискална сметка #{receipt.number}
+              Фискална сметка #{job.number}
             </p>
           )}
-          {receipt.status === 'manual' && receipt.blob && (
+          {receipt.status === 'manual' && job && (
             <>
               <p className="muted" style={{ fontSize: 13, maxWidth: 340 }}>
                 {receipt.message}
               </p>
-              <button
-                className="ghost"
-                style={{ marginTop: 8 }}
-                onClick={() => void sendToPrinter(receipt.blob!, receipt.number)}
-              >
-                Прати кон печатачот
-              </button>
+              {/*
+                The printer comes back on its own, so the button follows it: waiting
+                while it reconnects, a no-chooser reconnect once it has given up, and
+                the resend itself only when there is a link to send over.
+              */}
+              {printerLive.status === 'reconnecting' ? (
+                <button className="ghost" style={{ marginTop: 8 }} disabled>
+                  Се поврзува…
+                </button>
+              ) : printerLive.status === 'offline' ? (
+                <button className="ghost" style={{ marginTop: 8 }} onClick={() => void reconnectPrinter()}>
+                  Поврзи повторно
+                </button>
+              ) : (
+                <button
+                  className="ghost"
+                  style={{ marginTop: 8 }}
+                  disabled={printerLive.status === 'printing'}
+                  onClick={() => void sendToPrinter(job)}
+                >
+                  Печати повторно
+                </button>
+              )}
             </>
           )}
 
@@ -560,6 +640,29 @@ export function Pos({ onExit }: { onExit: () => void }) {
   const Wrapper = mode === 'charge' ? 'div' : Fragment
   const wrapperProps = mode === 'charge' ? { className: 'pos-charge-full' } : {}
 
+  /*
+    With the share sheet gone there is no second road to paper, and an
+    unpaired printer would otherwise only surface after the money has moved.
+    Every payment prints the guest's slip, so this no longer waits on the fiscal
+    box, and Наплата shows it too. Quiet and non-blocking on purpose: charging
+    without paper is a legitimate choice, so this never blocks checkout.
+  */
+  const printerHint =
+    printerLive.status === 'reconnecting' ? (
+      <div className="hint">Печатачот се поврзува повторно — печатењето ќе почека.</div>
+    ) : printerLive.status === 'offline' ? (
+      <div className="hint">
+        Печатачот не се јавува.{' '}
+        <button className="link-btn" onClick={() => void reconnectPrinter()}>
+          Поврзи повторно
+        </button>
+      </div>
+    ) : !PAIRED.includes(printerLive.status) ? (
+      <div className="hint">
+        Нема спарен печатач — ништо нема да излезе на хартија. Спарете печатач во Поставки.
+      </div>
+    ) : null
+
   /** The order itself — a side column on desktop, a bottom sheet on a phone. */
   const cartBody = (
     <>
@@ -616,17 +719,7 @@ export function Pos({ onExit }: { onExit: () => void }) {
         />
         <span>Испринтај фискална</span>
       </label>
-      {/*
-        With the share sheet gone there is no second road to paper, and an
-        unpaired printer would otherwise only surface after the money has moved.
-        Quiet and non-blocking on purpose: charging without a receipt is a
-        legitimate choice, so this neither blocks checkout nor unchecks the box.
-      */}
-      {printReceipt && printerLive.status !== 'ready' && (
-        <div className="hint">
-          Нема спарен печатач — сметката нема да излезе на хартија. Спарете печатач во Поставки.
-        </div>
-      )}
+      {printerHint}
 
       {!payable && (
         <div className="banner" style={{ marginTop: 12 }}>
@@ -659,6 +752,12 @@ export function Pos({ onExit }: { onExit: () => void }) {
           </button>
         </div>
       </div>
+
+      {unsent > 0 && (
+        <Link to="/receipts?unprinted=1" className="banner pos-unsent">
+          {unsent === 1 ? '1 неиспратена сметка денес' : `${unsent} неиспратени сметки денес`} →
+        </Link>
+      )}
 
       <div className="pos-mode-tabs">
         <button className={mode === 'bar' ? 'active' : ''} onClick={() => setMode('bar')}>
@@ -765,6 +864,8 @@ export function Pos({ onExit }: { onExit: () => void }) {
             })}>0</button>
             <button className="ghost" onClick={() => setCustomAmount((v) => v.slice(0, -1))}>⌫</button>
           </div>
+
+          {printerHint}
 
           <button
             className="gold big-btn"

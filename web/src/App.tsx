@@ -28,6 +28,7 @@ import { Orders } from './views/Orders'
 import { Pos } from './views/Pos'
 import { Reports } from './views/Reports'
 import { Settings } from './views/Settings'
+import { Receipts } from './views/Receipts'
 import { Tickets } from './views/Tickets'
 import { Audit } from './views/guest/Audit'
 import { Cards } from './views/guest/Cards'
@@ -41,6 +42,7 @@ import { Visits } from './views/guest/Visits'
 const TABS: Array<{ path: string; label: string; roles?: StaffRole[] }> = [
   { path: '/orders', label: 'Нарачки' },
   { path: '/pos', label: 'Каса', roles: ['admin', 'staff'] },
+  { path: '/receipts', label: 'Сметки', roles: ['admin', 'staff'] },
   { path: '/menu', label: 'Мени' },
   { path: '/guests', label: 'Гости', roles: ['admin', 'staff'] },
   { path: '/tickets', label: 'Тикети', roles: ['admin', 'staff'] },
@@ -258,6 +260,7 @@ function Shell({ user, onOut }: { user: StaffUser; onOut: () => void }) {
               {isAdmin && <Route path="audit" element={<Audit />} />}
             </Route>
           )}
+          {!isBar && <Route path="/receipts" element={<Receipts />} />}
           {!isBar && <Route path="/tickets" element={<Tickets isAdmin={isAdmin} />} />}
           {!isBar && <Route path="/reports" element={<Reports />} />}
           {isAdmin && (

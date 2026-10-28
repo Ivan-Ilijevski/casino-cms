@@ -156,6 +156,173 @@ export function getOrderWithLines(db: Db, orderId: string): OrderWithLines | und
   return row ? { ...row, items: getOrderLines(db, row.id) } : undefined
 }
 
+// --- How long a drink actually takes -------------------------------------
+//
+// Learned from fulfilled orders so the terminal can show a real estimate
+// before the bar has accepted anything. The alternative was a hand-tuned
+// number per drink that nobody would ever revisit.
+
+/** What a drink nobody has timed yet is assumed to take. */
+export const DEFAULT_PREP_S = 420
+
+/**
+ * A sample outside this window is discarded rather than averaged in. An order
+ * the bar forgot to mark fulfilled until closing time is not evidence about
+ * how long a coffee takes, and one sample of 40 000 seconds would poison the
+ * average for every guest after it.
+ */
+const MIN_SAMPLE_S = 20
+const MAX_SAMPLE_S = 3600
+
+/** Samples after which the average stops chasing the newest order. */
+const SAMPLE_MEMORY = 10
+
+/**
+ * Folds one fulfilled order's duration into the average of every drink in it.
+ *
+ * The attribution is deliberate: the per-drink figure means "how long an order
+ * containing this drink takes", not the drink's isolated pour time. That is
+ * what makes the order-level max() in estimatePrepSeconds self-consistent, and
+ * it is what the data can actually support -- the bar marks an order fulfilled,
+ * never a line of it.
+ *
+ * Called inside setOrderStatus's transaction, so a failed status change takes
+ * the sample with it.
+ */
+export function recordPrepTime(db: Db, orderId: string): void {
+  // Measured by SQLite, not by JS: created_at is a SQLite timestamp, and
+  // mixing the two clocks would make the sample wrong by whatever they differ.
+  const row = db
+    .prepare(
+      `SELECT CAST(strftime('%s','now') AS INTEGER)
+              - CAST(strftime('%s', created_at) AS INTEGER) AS secs
+       FROM orders WHERE id = ?`
+    )
+    .get(orderId) as { secs: number } | undefined
+  if (!row) return
+
+  const sample = row.secs
+  if (!Number.isFinite(sample) || sample < MIN_SAMPLE_S || sample > MAX_SAMPLE_S) return
+
+  const read = db.prepare(
+    'SELECT avg_prep_s, prep_samples FROM menu_items WHERE drink_id = ?'
+  )
+  const write = db.prepare(
+    'UPDATE menu_items SET avg_prep_s = ?, prep_samples = ? WHERE drink_id = ?'
+  )
+
+  const seen = new Set<number>()
+  for (const line of getOrderLines(db, orderId)) {
+    // drink_id 0 is placeCustomOrder's free-form POS charge, not a menu item.
+    if (line.drink_id === 0 || seen.has(line.drink_id)) continue
+    seen.add(line.drink_id)
+
+    const item = read.get(line.drink_id) as
+      | { avg_prep_s: number | null; prep_samples: number }
+      | undefined
+    if (!item) continue
+
+    const samples = item.prep_samples ?? 0
+    // The first sample IS the average; after that the weight settles to a
+    // ten-sample memory, so a bar that gets quicker is followed, not outvoted
+    // by a month of old orders.
+    const alpha = 1 / Math.min(samples + 1, SAMPLE_MEMORY)
+    const prev = item.avg_prep_s ?? sample
+    const next = Math.round(prev + (sample - prev) * alpha)
+    write.run(next, samples + 1, line.drink_id)
+  }
+}
+
+/**
+ * How long this selection should take: the slowest drink in it, because they
+ * are poured in parallel and the order is ready when the last one is.
+ */
+export function estimatePrepSeconds(db: Db, lines: Array<{ drinkId: number }>): number {
+  let longest = 0
+  for (const line of lines) {
+    const item = getMenuItem(db, line.drinkId)
+    longest = Math.max(longest, item?.avg_prep_s ?? DEFAULT_PREP_S)
+  }
+  return longest || DEFAULT_PREP_S
+}
+
+export type EtaSource = 'promised' | 'est'
+
+export interface OrderEta {
+  /** Whole seconds still to wait, never negative. */
+  eta_s: number
+  /** The span the terminal's ring represents, measured from order creation. */
+  eta_total_s: number
+  eta_src: EtaSource
+}
+
+function sqliteSeconds(db: Db, stamp: string): number {
+  const row = db
+    .prepare(`SELECT CAST(strftime('%s', ?) AS INTEGER) AS secs`)
+    .get(stamp) as { secs: number | null }
+  return row.secs ?? 0
+}
+
+/**
+ * The countdown for one order, or null when a countdown is meaningless
+ * (fulfilled and cancelled say everything in the status alone).
+ *
+ * Relative seconds rather than the promised_at timestamp because the terminal
+ * has no wall clock at all -- no RTC, no SNTP, only microseconds since boot.
+ * Same reason setOrderStatus takes a minute offset instead of a time.
+ */
+export function etaForOrder(db: Db, order: OrderRow): OrderEta | null {
+  if (order.status === 'fulfilled' || order.status === 'cancelled') return null
+
+  const now = sqliteSeconds(db, 'now')
+  const created = sqliteSeconds(db, order.created_at)
+
+  if (order.status === 'accepted' && order.promised_at) {
+    const promised = sqliteSeconds(db, order.promised_at)
+    return {
+      eta_s: Math.max(0, promised - now),
+      // From creation, so the ring can be drawn from this one message without
+      // remembering what it was told earlier -- which is what makes a resync
+      // after a terminal reboot land on the right arc.
+      eta_total_s: Math.max(1, promised - created),
+      eta_src: 'promised'
+    }
+  }
+
+  // Still our own guess: counted down from creation, so a long wait shrinks
+  // the estimate instead of restarting it every time it is asked for.
+  const estimate = estimatePrepSeconds(
+    db,
+    getOrderLines(db, order.id).map((l) => ({ drinkId: l.drink_id }))
+  )
+  return {
+    eta_s: Math.max(0, estimate - (now - created)),
+    eta_total_s: estimate,
+    eta_src: 'est'
+  }
+}
+
+/** At most this many open orders are replayed to a terminal on resync. */
+const MAX_ACTIVE_ORDERS = 4
+
+/**
+ * A card's still-open orders, newest first.
+ *
+ * By card rather than by session on purpose: sid is minted fresh on every
+ * re-auth, so a session-scoped lookup would return nothing for exactly the
+ * guest who just tapped back in to check on their drink.
+ */
+export function activeOrdersForCard(db: Db, cardId: string): OrderRow[] {
+  return db
+    .prepare(
+      `SELECT * FROM orders
+       WHERE card_id = ? AND status IN ('received','accepted')
+       ORDER BY created_at DESC, number DESC
+       LIMIT ?`
+    )
+    .all(cardId, MAX_ACTIVE_ORDERS) as OrderRow[]
+}
+
 export type StatusResult =
   | { ok: true; refunded: boolean; order: OrderRow }
   | { ok: false; reason: 'unknown_order' | 'invalid_transition' }
@@ -216,6 +383,13 @@ export function setOrderStatus(
     }
 
     const fulfilling = opts.status === 'fulfilled'
+    // Before the UPDATE, while created_at still describes this order's wait,
+    // and inside the transaction so a failed status change takes the sample
+    // with it. The status guard above is what stops a double-click counting
+    // the same order twice.
+    if (fulfilling) {
+      recordPrepTime(db, order.id)
+    }
     // An estimate only means anything on the way into 'accepted'; on any other
     // transition it is ignored rather than rejected, so a client that always
     // sends one cannot be wrong.

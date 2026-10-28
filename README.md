@@ -217,8 +217,11 @@ triggers. Two consequences:
 
 - **A reload drops the pairing.** Web Bluetooth cannot silently restore a connection
   without a fresh gesture, so the operator re-pairs after every refresh or kiosk reboot.
-  Switching the printer off or walking out of range does the same, and nothing reconnects
-  on its own.
+- **A dropped link does not.** Switching the printer off or walking out of range keeps the
+  paired printer: `device.gatt.connect()` on a device the chooser already granted needs no
+  gesture, so the store goes to **reconnecting** and tries by itself — after 1 s, 2 s, 4 s,
+  then every 10 s for two minutes — and then to **offline**, where „Поврзи повторно" (in
+  Поставки, on the cart screen and on the done screen) tries again without the chooser.
 - **Moving between views does not.** The connection is a module-level singleton in
   `web/src/printer.ts`, not React state, so it survives `Pos.tsx` unmounting; Settings and
   the POS read the same store through `useSyncExternalStore`.
@@ -240,13 +243,49 @@ knows is that the bytes left the tablet. Every string the operator sees therefor
 **"испратено"** (sent) and never "испечатено" (printed). That wording is deliberate — it
 is not a translation slip to be tidied up later.
 
-**A failure needs a re-pair, and there is no fallback.** A failed write may already have
-been delivered, so the library refuses every further job on that link until a disconnect
-and a fresh connect; `printPng` therefore tears the connection down, drops to idle and
-makes the next attempt a deliberate re-pair. It **never retries by itself**. With the
-share sheet gone there is nothing to fall back to — an unpaired or broken printer means no
-receipt at all — so the cart screen warns before the card is charged, and the done screen
-offers a manual retry.
+**A failed or interrupted receipt reconnects, but is never re-sent by itself.** A failed
+write may already have been delivered, so the library refuses every further job on that
+link until a disconnect and a fresh `connect()` — which works on the same instance, so
+`printPng` closes the link and hands it to the same reconnect loop instead of forgetting
+the printer. What it **never** does is send the job again: if the printer dropped at 40%,
+40% of a receipt is hanging out of it. The done screen says how far it got („Печатачот се
+исклучи при испраќањето (40%)") and the operator tears that off and taps „Печати
+повторно" once the printer is back. A print that finds the link on its way back waits up to
+8 s for it rather than failing. With the share sheet gone there is nothing to fall back to,
+so the cart screen still warns before the card is charged.
+
+### Receipt history, reprints and the print log (`/receipts`)
+
+**Сметки** lists one business day's receipts with where each one stands, and opens any of
+them: the image, its lines, and every attempt to print it. Admin and staff only — the bar
+tablet is refused by the same default-deny as everything else.
+
+**The receipt is stored, not re-rendered.** `receipts.png` keeps the render exactly as the
+API returned it, and `receipts.items` the lines it was sent. A reprint is that image again —
+byte for byte, including whatever date and time the render service stamped on it — and
+works while the render service is down. Asking `/api/pos/receipt` again for a sale that
+already has its document returns the stored one without calling the render API. Receipts
+from before this was stored (migration 014) render once, from their sale and under their
+existing number, the first time they are opened, and are kept from then on.
+
+**The lines come from the sale, not the browser.** `/api/pos/receipt` reads name, quantity
+and price from `order_items` and the VAT band from `menu_items`; any `items` in the request
+are ignored. A sale with a line that is on no menu — a custom „Наплата" charge — is refused
+with 409 rather than printed with a guessed VAT band.
+
+**A reprint is marked КОПИЈА.** The server decides: once any attempt at a receipt has
+reached `sent`, every further print is a copy, the tablet draws a solid КОПИЈА band above
+and below the stored image (`web/src/receiptPrint.ts`), and `receipt.reprint` is written to
+the audit log with who asked. A retry after an interrupted or failed attempt is still the
+original — no whole original ever came out.
+
+**`rendered_at` is not "printed".** It means the render API answered, which happens before a
+byte goes over Bluetooth. Whether a receipt reached the printer is `receipt_prints`: the
+tablet opens an attempt before sending (`sending`) and closes it as `sent`, `interrupted`
+(with the percent reached) or `failed` (with the operator-facing reason). An attempt left
+at `sending` is a tablet that died mid-print and shows as „без потврда". A receipt with no
+`sent` attempt is **неиспратена**, and the POS cart screen links to today's list of them,
+so walking away from a done screen does not lose a receipt.
 
 ### `web-timini-print` is installed from a local path
 

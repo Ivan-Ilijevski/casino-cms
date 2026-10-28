@@ -422,3 +422,75 @@ describe('013_machines', () => {
     expect(fks.map((f) => f.table)).not.toContain('machines')
   })
 })
+
+describe('014_receipt_history', () => {
+  function seedReceipt(db: Db): number {
+    db.prepare(
+      `INSERT INTO orders (id, number, card_id, pay_method, total_deni, total_points)
+       VALUES ('o1', 1, 'c1', 'cash', 24000, 0)`
+    ).run()
+    return Number(
+      db
+        .prepare(
+          `INSERT INTO receipts (day, seq, order_id, pay_method, total_deni, actor, time_zone, rendered_at)
+           VALUES ('2026-07-07', 1, 'o1', 'cash', 24000, 'barman', 'Europe/Skopje', datetime('now'))`
+        )
+        .run().lastInsertRowid
+    )
+  }
+
+  test('receipts issued before it survive, with nothing stored to reprint from yet', () => {
+    const db = dbAtMigration('013_machines')
+    seedCard(db)
+    seedReceipt(db)
+    migrate(db)
+
+    // NULL rather than a guess: receiptHistory re-renders these once from the order.
+    expect(db.prepare('SELECT seq, items, png FROM receipts').get()).toEqual({
+      seq: 1,
+      items: null,
+      png: null
+    })
+  })
+
+  test('a print attempt starts out unconfirmed', () => {
+    const db = dbAtMigration('014_receipt_history')
+    seedCard(db)
+    const receiptId = seedReceipt(db)
+
+    db.prepare("INSERT INTO receipt_prints (receipt_id, copy, actor) VALUES (?, 0, 'barman')").run(receiptId)
+
+    expect(db.prepare('SELECT status, finished_at AS f FROM receipt_prints').get()).toEqual({
+      status: 'sending',
+      f: null
+    })
+  })
+
+  test('an attempt can only end in an outcome the history view knows', () => {
+    const db = dbAtMigration('014_receipt_history')
+    seedCard(db)
+    const receiptId = seedReceipt(db)
+
+    expect(() =>
+      db
+        .prepare("INSERT INTO receipt_prints (receipt_id, copy, actor, status) VALUES (?, 0, 'barman', 'printed')")
+        .run(receiptId)
+    ).toThrow(/CHECK/)
+    expect(() =>
+      db.prepare("INSERT INTO receipt_prints (receipt_id, copy, actor) VALUES (?, 2, 'barman')").run(receiptId)
+    ).toThrow(/CHECK/)
+    expect(() =>
+      db
+        .prepare("INSERT INTO receipt_prints (receipt_id, copy, actor, percent) VALUES (?, 0, 'barman', 101)")
+        .run(receiptId)
+    ).toThrow(/CHECK/)
+  })
+
+  test('a print attempt must belong to a receipt', () => {
+    const db = dbAtMigration('014_receipt_history')
+
+    expect(() =>
+      db.prepare("INSERT INTO receipt_prints (receipt_id, copy, actor) VALUES (999, 0, 'barman')").run()
+    ).toThrow(/FOREIGN KEY/)
+  })
+})

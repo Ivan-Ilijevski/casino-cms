@@ -25,12 +25,21 @@ function buildApp(
   })
 }
 
-/** A receipt is issued against a sale, so every printing test needs one. */
-function seedOrder(id: string, number: number): string {
+/**
+ * A receipt is issued against a sale, so every printing test needs one — with lines,
+ * because the receipt's lines are read from the sale. Drink 1 is the seeded Кафе.
+ * Drink 0 is what a custom POS charge records, which is on no menu.
+ */
+function seedOrder(id: string, number: number, drinkId = 1): string {
   db.prepare(
     `INSERT INTO orders (id, number, card_id, pay_method, total_deni, total_points)
-     VALUES (?, ?, 'c1', 'cash', 24000, 0)`
+     VALUES (?, ?, 'c1', 'cash', 16000, 0)`
   ).run(id, number)
+  db.prepare(
+    `INSERT INTO order_items
+       (order_id, drink_id, name, qty, unit_price_deni, unit_points, line_total_deni, line_total_points)
+     VALUES (?, ?, ?, 2, 8000, 0, 16000, 0)`
+  ).run(id, drinkId, drinkId === 0 ? 'Чипови' : 'Кафе')
   return id
 }
 
@@ -78,15 +87,40 @@ describe('POST /api/pos/receipt', () => {
     expect((await request(app).post('/api/pos/receipt').send({ items: ITEMS })).status).toBe(401)
   })
 
-  test('rejects a request with no items', async () => {
-    app = buildApp()
+  test("prints the sale's own lines, whatever the browser sends", async () => {
+    app = buildApp({ receiptApiUrl: 'https://receipts.example', receiptApiKey: 'secret' })
     const agent = await loginAs('barman')
+    const fetchMock = stubRender()
+    db.prepare("UPDATE menu_items SET vat_type = 'B', is_domestic = 0 WHERE drink_id = 1").run()
 
+    const res = await agent.post('/api/pos/receipt').send({
+      items: [{ name: 'Шампањ', quantity: 9, price: 1, vatType: 'V', isDomestic: true }],
+      payMethod: 'cash',
+      orderId: seedOrder('o1', 1)
+    })
+
+    expect(res.status).toBe(200)
+    // Name, quantity and price as the sale froze them; the VAT band from the menu.
+    expect(JSON.parse(fetchMock.mock.calls[0][1].body).items).toEqual([
+      { name: 'Кафе', quantity: 2, price: 80, vatType: 'B', isDomestic: false }
+    ])
+  })
+
+  test('refuses a sale whose lines are not drinks, and numbers nothing', async () => {
+    app = buildApp({ receiptApiUrl: 'https://receipts.example', receiptApiKey: 'secret' })
+    const agent = await loginAs('barman')
+    const fetchMock = stubRender()
+
+    // A custom charge is on no menu, so it has no VAT band to print — and guessing one
+    // on a fiscal document is worse than printing nothing.
     const res = await agent
       .post('/api/pos/receipt')
-      .send({ items: [], payMethod: 'cash', orderId: seedOrder('o1', 1) })
+      .send({ payMethod: 'cash', orderId: seedOrder('o1', 1, 0) })
 
-    expect(res.status).toBe(400)
+    expect(res.status).toBe(409)
+    expect(res.body.code).toBe('unprintable')
+    expect(fetchMock).not.toHaveBeenCalled()
+    expect(receiptRows()).toEqual([])
   })
 
   test('fails closed when the receipt API is not configured', async () => {
@@ -261,12 +295,15 @@ describe('POST /api/pos/receipt', () => {
     const fetchMock = stubRender()
     const orderId = seedOrder('o1', 1)
 
-    await agent.post('/api/pos/receipt').send({ items: ITEMS, payMethod: 'cash', orderId })
-    const again = await agent.post('/api/pos/receipt').send({ items: ITEMS, payMethod: 'cash', orderId })
+    const first = await agent.post('/api/pos/receipt').send({ payMethod: 'cash', orderId })
+    const again = await agent.post('/api/pos/receipt').send({ payMethod: 'cash', orderId })
 
     expect(again.headers['x-receipt-number']).toBe('0001')
-    expect(JSON.parse(fetchMock.mock.calls[1][1].body).receiptNumber).toBe('0001')
+    expect(again.headers['x-receipt-id']).toBe(first.headers['x-receipt-id'])
     expect(receiptRows()).toHaveLength(1)
+    // The stored document comes back; a second render could stamp a different time.
+    expect(fetchMock).toHaveBeenCalledTimes(1)
+    expect(Buffer.from(again.body)).toEqual(Buffer.from(first.body))
   })
 
   test('the counter restarts at 0001 when the local day rolls over', async () => {
@@ -313,6 +350,25 @@ describe('POST /api/pos/receipt', () => {
     expect(row!.actor).toBe('barman')
     expect(row!.orderId).toBe('o1')
     expect(row!.renderedAt).not.toBeNull()
+  })
+
+  test('keeps the rendered image and its lines, and names the row in a header', async () => {
+    app = buildApp({ receiptApiUrl: 'https://receipts.example', receiptApiKey: 'secret' })
+    const agent = await loginAs('barman')
+    stubRender()
+
+    const res = await agent.post('/api/pos/receipt').send({ payMethod: 'cash', orderId: seedOrder('o1', 1) })
+
+    const stored = db.prepare('SELECT id, items, png FROM receipts').get() as {
+      id: number
+      items: string
+      png: Buffer
+    }
+    expect(res.headers['x-receipt-id']).toBe(String(stored.id))
+    expect(Buffer.from(stored.png)).toEqual(Buffer.from([137, 80, 78, 71]))
+    expect(JSON.parse(stored.items)).toEqual([
+      { name: 'Кафе', quantity: 2, price: 80, vatType: 'A', isDomestic: true }
+    ])
   })
 
   test('an upstream failure gives the number back, so the sequence stays dense', async () => {

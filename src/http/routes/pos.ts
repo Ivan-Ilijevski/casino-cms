@@ -1,14 +1,16 @@
 import { Router } from 'express'
 import { getCard } from '../../domain/accounts.js'
 import { audit } from '../../domain/audit.js'
+import { paymentSlip } from '../../domain/paymentSlip.js'
 import { confirmIntent, createIntent, setPin } from '../../domain/pos.js'
 import type { OrderRequestItem, PayMethod } from '../../domain/orders.js'
 import { businessDay } from '../../domain/businessDay.js'
 import { isPayMethod, renderReceipt } from '../../domain/receipt.js'
+import { receiptLinesForOrder, UnprintableOrderError } from '../../domain/receiptHistory.js'
 import {
   allocateReceiptNumber,
-  markRendered,
   releaseReceiptNumber,
+  storeRendered,
   UnknownOrderError
 } from '../../domain/receiptNumbers.js'
 import { param, pushBalanceForCard, type StaffDeps } from '../deps.js'
@@ -110,7 +112,13 @@ export function posRouter(deps: StaffDeps): Router {
       deps.events.emit('order.created', { orderId: result.orderId })
     }
 
-    res.json(result)
+    // The guest's card slip rides on this one response and nowhere else — it is not a
+    // fiscal document and nothing about it is stored. See domain/paymentSlip.ts.
+    const slip = paymentSlip(deps.db, intentId, {
+      address: deps.config.receiptAddress,
+      at: deps.now?.() ?? new Date()
+    })
+    res.json({ ...result, slip })
   })
 
   /**
@@ -119,14 +127,11 @@ export function posRouter(deps: StaffDeps): Router {
    * Any signed-in staff member may print — same gate as the payment routes.
    *
    * Not in audit_log, but no longer unrecorded: the receipts table is the record
-   * of what printed, and it is the fiscal one.
+   * of what was issued, and receipt_prints (routes/receipts.ts) of what reached the
+   * printer.
    */
   router.post('/pos/receipt', async (req, res) => {
-    const { items, payMethod, orderId } = req.body ?? {}
-    if (!Array.isArray(items) || items.length === 0) {
-      res.status(400).json({ error: 'items must be a non-empty array' })
-      return
-    }
+    const { payMethod, orderId } = req.body ?? {}
     // Fail closed rather than defaulting. An absent tender line is precisely how every
     // денари sale used to print as ВО ГОТОВО: the render API fills what it is not sent from
     // its own preset, so a malformed request produced a plausible, wrong fiscal document.
@@ -140,6 +145,24 @@ export function posRouter(deps: StaffDeps): Router {
     // has no order and so can never be printed — until now a client-side convention.
     if (typeof orderId !== 'string' || orderId.trim() === '') {
       res.status(400).json({ error: 'orderId is required' })
+      return
+    }
+
+    // The lines come from the sale, never from the request. The browser used to send
+    // them, which made a fiscal receipt say whatever the tablet typed — and left the
+    // server nothing true to reprint from. Built before a number is taken, so a sale
+    // that cannot be printed never burns one.
+    let items
+    try {
+      items = receiptLinesForOrder(deps.db, orderId)
+    } catch (e) {
+      if (!(e instanceof UnprintableOrderError)) throw e
+      const known = deps.db.prepare('SELECT 1 FROM orders WHERE id = ?').get(orderId)
+      if (!known) {
+        res.status(404).json({ error: 'no such order' })
+        return
+      }
+      res.status(409).json({ error: e.message, code: 'unprintable' })
       return
     }
 
@@ -160,11 +183,33 @@ export function posRouter(deps: StaffDeps): Router {
       throw e
     }
 
+    const sendPng = (png: Buffer, contentType: string) => {
+      res.set('Content-Type', contentType)
+      res.set('Cache-Control', 'no-store')
+      // Saves the done screen a second round trip just to name the receipt it printed,
+      // and gives it the row to log its print attempts against.
+      res.set('X-Receipt-Number', number.printed)
+      res.set('X-Receipt-Id', String(number.id))
+      res.send(png)
+    }
+
+    // A sale that already has its document gets that document back. Rendering it again
+    // could stamp a different time on the same fiscal number.
+    if (number.reused) {
+      const stored = deps.db.prepare('SELECT png FROM receipts WHERE id = ?').get(number.id) as {
+        png: Buffer | null
+      }
+      if (stored.png) {
+        sendPng(stored.png, 'image/png')
+        return
+      }
+    }
+
     // The number has to be committed before the render, because it goes *into* the
     // request and better-sqlite3 cannot hold a transaction across an await. So every
-    // way out of here either marks it printed or gives it back: a number burned by a
-    // failed render is a hole in a fiscal sequence, and holes are what get questioned.
-    // A reused number belongs to a receipt that already printed — never release that.
+    // way out of here either stores the render or gives the number back: a number burned
+    // by a failed render is a hole in a fiscal sequence, and holes are what get questioned.
+    // A reused number belongs to a receipt that already rendered — never release that.
     let result
     try {
       result = await renderReceipt(deps.config, { items, payMethod, receiptNumber: number.printed })
@@ -182,12 +227,8 @@ export function posRouter(deps: StaffDeps): Router {
       return
     }
 
-    markRendered(deps.db, number.id)
-    res.set('Content-Type', result.contentType)
-    res.set('Cache-Control', 'no-store')
-    // Saves the done screen a second round trip just to name the receipt it printed.
-    res.set('X-Receipt-Number', number.printed)
-    res.send(result.png)
+    storeRendered(deps.db, number.id, { items, png: result.png })
+    sendPng(result.png, result.contentType)
   })
 
   router.post('/cards/:id/pin', requireRole('admin'), (req, res) => {

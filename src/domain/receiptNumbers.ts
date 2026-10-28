@@ -89,9 +89,22 @@ export function allocateReceiptNumber(
     .immediate()
 }
 
-/** Records that the number actually reached paper. */
-export function markRendered(db: Db, id: number): void {
-  db.prepare("UPDATE receipts SET rendered_at = datetime('now') WHERE id = ?").run(id)
+/**
+ * Records that the render API produced this receipt, and keeps what it produced.
+ *
+ * "Rendered" is not "printed": this runs before a single byte goes over Bluetooth.
+ * Whether the paper came out is the print log's question (receipt_prints). What is
+ * stored here is the fiscal document itself, so a reprint is that image again rather
+ * than a fresh render that might stamp a different time on it.
+ *
+ * One UPDATE, so no row can claim to have rendered without the image to show for it.
+ */
+export function storeRendered(db: Db, id: number, rendered: { items: unknown; png: Buffer }): void {
+  db.prepare("UPDATE receipts SET rendered_at = datetime('now'), items = ?, png = ? WHERE id = ?").run(
+    JSON.stringify(rendered.items),
+    rendered.png,
+    id
+  )
 }
 
 /**

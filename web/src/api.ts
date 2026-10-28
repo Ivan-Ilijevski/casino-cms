@@ -166,6 +166,48 @@ export interface ReceiptLine {
   isDomestic: boolean
 }
 
+/** How one print attempt ended. 'sending' is still open — or its tablet never said. */
+export type ReceiptPrintStatus = 'sending' | 'sent' | 'interrupted' | 'failed'
+
+export interface ReceiptSummary {
+  id: number
+  day: string
+  seq: number
+  /** Zero-padded, as printed after the # on the paper. */
+  number: string
+  orderId: string
+  orderNumber: number
+  payMethod: 'cash' | 'points'
+  totalDeni: number
+  actor: string
+  createdAt: string
+  /** An attempt reached the printer whole. Not proof of paper — see printer.ts. */
+  printed: boolean
+  attempts: number
+  copies: number
+  lastStatus: ReceiptPrintStatus | null
+  lastPercent: number | null
+  lastAt: string | null
+}
+
+export interface ReceiptPrint {
+  id: number
+  copy: boolean
+  actor: string
+  device: string | null
+  status: ReceiptPrintStatus
+  percent: number | null
+  error: string | null
+  startedAt: string
+  finishedAt: string | null
+}
+
+export interface ReceiptDetail {
+  receipt: ReceiptSummary & { renderedAt: string | null; timeZone: string; stored: boolean }
+  items: ReceiptLine[] | null
+  prints: ReceiptPrint[]
+}
+
 export interface Card {
   id: string
   card_uid: string
@@ -299,7 +341,180 @@ export interface CustomerPage {
   offset: number
 }
 
-export type OsintReason = 'kyc' | 'aml' | 'self_exclusion' | 'dispute' | 'other'
+export type OsintReason = 'kyc' | 'aml' | 'self_exclusion' | 'dispute' | 'profile' | 'other'
+
+export type OsintEngine = 'claude' | 'codex'
+export type OsintEngineChoice = OsintEngine | 'both'
+export type OsintRunStatus = 'running' | 'done' | 'failed'
+export type OsintVerdict = 'no_match' | 'possible_match' | 'likely_match' | 'insufficient_data'
+export type OsintCategory =
+  | 'sanctions'
+  | 'pep'
+  | 'adverse_media'
+  | 'court_legal'
+  | 'business'
+  | 'identity'
+  | 'social_profile'
+  | 'employment'
+  | 'education'
+  | 'media'
+  | 'interests'
+  | 'other'
+export type OsintSeverity = 'info' | 'low' | 'medium' | 'high'
+export type OsintConfidence = 'low' | 'medium' | 'high'
+
+export interface OsintLookupHistory {
+  count: number
+  last_at: string
+  last_actor: string
+  last_reason: OsintReason | null
+}
+
+export interface OsintRunSummary {
+  id: string
+  actor: string
+  reason: OsintReason
+  engines: OsintEngineChoice
+  status: OsintRunStatus
+  verdict: OsintVerdict | null
+  findings: number | null
+  created_at: string
+  finished_at: string | null
+}
+
+export interface OsintOverview {
+  /** Spellings of the guest's name, original first (Cyrillic ↔ Latin). */
+  variants: string[]
+  /** Which guest fields an AI run would disclose. Never doc_id. */
+  disclosed: Array<'name' | 'city' | 'dob' | 'phone' | 'email'>
+  engines: Record<OsintEngine, boolean>
+  /** Link-launcher history, keyed by source id. */
+  lookups: Record<string, OsintLookupHistory>
+  runs: OsintRunSummary[]
+  /** The guest's consented reference photo for face comparison, if any. */
+  photo: OsintPhotoMeta | null
+}
+
+export interface OsintPhotoMeta {
+  sha256: string
+  consent_by: string
+  consent_at: string
+}
+
+export interface OsintAccount {
+  platform: string
+  handle: string | null
+  url: string
+  match_confidence: OsintConfidence
+  match_basis: string
+  engines: OsintEngine[]
+}
+
+export interface OsintImageCandidate {
+  image_url: string | null
+  page_url: string
+  description: string
+  match_confidence: OsintConfidence
+  match_basis: string
+  engines: OsintEngine[]
+  corroborated: boolean
+}
+
+export type OsintFaceVerdict = 'match' | 'possible' | 'different' | 'no_face'
+
+/** A photo the server tried to download for a profile run. Bytes are served separately. */
+export interface OsintImage {
+  id: number
+  origin: 'report' | 'account'
+  image_url: string | null
+  page_url: string
+  description: string | null
+  match_confidence: OsintConfidence
+  engines: OsintEngine[]
+  status: 'stored' | 'failed'
+  content_type: string | null
+  error: string | null
+  face_verdict: OsintFaceVerdict | null
+  face_distance: number | null
+  faces: number | null
+  face_checked_at: string | null
+  created_at: string
+}
+
+export interface OsintReportSource {
+  url: string
+  title: string
+  published: string | null
+}
+
+export interface OsintFinding {
+  category: OsintCategory
+  title: string
+  detail: string
+  severity: OsintSeverity
+  match_confidence: OsintConfidence
+  match_basis: string
+  sources: OsintReportSource[]
+  engines: OsintEngine[]
+  corroborated: boolean
+}
+
+export interface OsintMerged {
+  engines: OsintEngine[]
+  verdict: OsintVerdict
+  verdicts: Partial<Record<OsintEngine, OsintVerdict>>
+  disagreement: boolean
+  summaries: Partial<Record<OsintEngine, string>>
+  findings: OsintFinding[]
+  /** Profile runs only; absent on runs stored before profiles existed. */
+  accounts?: OsintAccount[]
+  images?: OsintImageCandidate[]
+  suggested_tags: Array<{ tag: string; rationale: string; engines: OsintEngine[] }>
+  limitations: Partial<Record<OsintEngine, string>>
+}
+
+export type OsintActivityKind = 'start' | 'search' | 'open' | 'find' | 'results' | 'fetched' | 'note' | 'done' | 'error'
+
+/** One step of an engine's live log. `t` is epoch milliseconds (server clock). */
+export interface OsintActivity {
+  t: number
+  kind: OsintActivityKind
+  text: string
+}
+
+export interface OsintEngineResult {
+  engine: OsintEngine
+  status: OsintRunStatus
+  queries: string[]
+  /** Empty on runs stored before the activity log existed. */
+  activity: OsintActivity[]
+  cost_usd: number | null
+  error: string | null
+  started_at: string
+  finished_at: string | null
+}
+
+export interface OsintRun {
+  id: string
+  player_id: string
+  actor: string
+  reason: OsintReason
+  engines: OsintEngineChoice
+  status: OsintRunStatus
+  subject: {
+    name: string
+    variants: string[]
+    city: string | null
+    dob: string | null
+    phone: string | null
+    email: string | null
+  }
+  merged: OsintMerged | null
+  created_at: string
+  finished_at: string | null
+  results: OsintEngineResult[]
+  images: OsintImage[]
+}
 
 export interface Ticket {
   id: string
@@ -364,8 +579,45 @@ export type PosIntentResponse =
     }
   | { ok: false; code: string }
 
+/**
+ * The guest's card slip — the Ingenico-style paper that goes out above the fiscal
+ * receipt, or alone for a charge with none. Not fiscal and never kept: it exists only
+ * in the confirm response. See src/domain/paymentSlip.ts.
+ */
+export interface PaymentSlip {
+  address: string | null
+  /** ISO instant the charge was approved. */
+  at: string
+  /** Already masked by the server: `**** 5AF4`. */
+  card: string
+  playerName: string
+  direction: PosDirection
+  pay: 'cash' | 'points'
+  amountDeni: number
+  amountPoints: number
+  label: string | null
+  orderNumber: number | null
+  reference: string
+  pinVerified: boolean
+  /** The staff member whose session took the payment. */
+  staff: string
+  /** Balances before and after the payment. */
+  balanceBeforeDeni: number
+  pointsBefore: number
+  balanceDeni: number
+  points: number
+}
+
 export type PosConfirmResponse =
-  | { ok: true; orderId: string | null; number: number | null; balanceDeni: number; points: number; direction: PosDirection }
+  | {
+      ok: true
+      orderId: string | null
+      number: number | null
+      balanceDeni: number
+      points: number
+      direction: PosDirection
+      slip: PaymentSlip
+    }
   | { ok: false; code: string; attemptsLeft?: number }
 
 async function req<T>(path: string, init?: RequestInit): Promise<T> {
@@ -448,25 +700,57 @@ export const api = {
   /**
    * Renders a fiscal receipt as a PNG. Returns the image itself rather than
    * JSON, so this bypasses req/post and reads the response as a Blob.
+   *
+   * The lines are the server's to read off the sale; the browser only names the sale
+   * and how it was paid.
    */
   receiptImage: async (
-    items: ReceiptLine[],
     payMethod: 'cash' | 'points',
     orderId: string
-  ): Promise<{ blob: Blob; number: string | null }> => {
+  ): Promise<{ blob: Blob; number: string | null; receiptId: number | null }> => {
     const res = await fetch('/api/pos/receipt', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ items, payMethod, orderId })
+      body: JSON.stringify({ payMethod, orderId })
     })
     if (!res.ok) {
       const body = await res.json().catch(() => ({}))
       throw new ApiError(body.error ?? `receipt failed (${res.status})`, res.status)
     }
     // The server allocates the daily number; it comes back in a header so the done
-    // screen can name the receipt without asking for it separately.
-    return { blob: await res.blob(), number: res.headers.get('X-Receipt-Number') }
+    // screen can name the receipt without asking for it separately, alongside the row
+    // its print attempts are logged against.
+    const id = res.headers.get('X-Receipt-Id')
+    return {
+      blob: await res.blob(),
+      number: res.headers.get('X-Receipt-Number'),
+      receiptId: id ? Number(id) : null
+    }
   },
+
+  receipts: (q: { day?: string; unprinted?: boolean } = {}) => {
+    const params = new URLSearchParams()
+    if (q.day) params.set('day', q.day)
+    if (q.unprinted) params.set('unprinted', '1')
+    const qs = params.toString()
+    return req<ReceiptSummary[]>(`/receipts${qs ? `?${qs}` : ''}`)
+  },
+  receipt: (id: number) => req<ReceiptDetail>(`/receipts/${id}`),
+  /** The stored render, for a reprint. Same Blob shape as receiptImage. */
+  receiptImageById: async (id: number): Promise<Blob> => {
+    const res = await fetch(`/api/receipts/${id}/image`)
+    if (!res.ok) {
+      const body = await res.json().catch(() => ({}))
+      throw new ApiError(body.error ?? `receipt image failed (${res.status})`, res.status)
+    }
+    return res.blob()
+  },
+  startReceiptPrint: (id: number, device: string | null) =>
+    post<{ printId: number; copy: boolean }>(`/receipts/${id}/prints`, { device }),
+  finishReceiptPrint: (
+    printId: number,
+    outcome: { status: Exclude<ReceiptPrintStatus, 'sending'>; percent: number; error?: string }
+  ) => post<{ ok: true }>(`/receipts/prints/${printId}`, outcome),
 
   tickets: (status?: string) => req<Ticket[]>(`/tickets${status ? `?status=${status}` : ''}`),
   issueTicket: (amountDeni: number) => post<Ticket>('/tickets', { amountDeni }),
@@ -514,6 +798,55 @@ export const api = {
    */
   osintLookup: (id: string, source: string, reason: OsintReason) =>
     post<{ ok: true }>(`/customers/${id}/osint-lookup`, { source, reason }),
+
+  /** Name spellings, available AI engines, link history and past AI runs. */
+  osintOverview: (id: string) => req<OsintOverview>(`/customers/${id}/osint`),
+  /**
+   * Starts an AI screening. Unlike a link lookup this DOES send guest details
+   * (never the document number) to Anthropic and/or OpenAI, and the report is
+   * stored until deleted. Answers 202 at once; poll osintRun for progress.
+   */
+  osintStartRun: (id: string, reason: OsintReason, engines: OsintEngineChoice) =>
+    post<{ run: OsintRun }>(`/customers/${id}/osint-runs`, { reason, engines }),
+  osintRun: (id: string, runId: string) => req<OsintRun>(`/customers/${id}/osint-runs/${runId}`),
+  osintDeleteRun: (id: string, runId: string) =>
+    req<{ ok: true }>(`/customers/${id}/osint-runs/${runId}`, { method: 'DELETE' }),
+  osintApplyTag: (id: string, runId: string, tag: string) =>
+    post<{ tags: string[] }>(`/customers/${id}/osint-runs/${runId}/apply-tag`, { tag }),
+
+  /** Same-origin URL of a stored profile photo (for <img src>). */
+  osintImageSrc: (id: string, runId: string, imageId: number) =>
+    `/api/customers/${id}/osint-runs/${runId}/images/${imageId}`,
+  osintDeleteImage: (id: string, runId: string, imageId: number) =>
+    req<{ ok: true }>(`/customers/${id}/osint-runs/${runId}/images/${imageId}`, { method: 'DELETE' }),
+  osintDeleteDifferentFaces: (id: string, runId: string) =>
+    req<{ ok: true; count: number }>(`/customers/${id}/osint-runs/${runId}/images?face=different`, { method: 'DELETE' }),
+  /** Only the outcome of a comparison is sent — face descriptors stay in the browser. */
+  osintFaceResults: (
+    id: string,
+    runId: string,
+    results: Array<{ imageId: number; verdict: OsintFaceVerdict; distance: number | null; faces: number }>
+  ) => post<{ ok: true; updated: number }>(`/customers/${id}/osint-runs/${runId}/face-results`, { results }),
+
+  /** The guest's reference photo. `v` busts the cache when the photo is replaced. */
+  guestPhotoSrc: (id: string, sha256: string) => `/api/customers/${id}/photo?v=${sha256.slice(0, 12)}`,
+  /**
+   * Uploads the reference photo. `consent` must be true — the server refuses
+   * without it, because face comparison rests on the guest's consent.
+   */
+  uploadGuestPhoto: async (id: string, file: Blob, consent: true): Promise<{ photo: OsintPhotoMeta }> => {
+    const res = await fetch(`/api/customers/${id}/photo?consent=${consent ? '1' : '0'}`, {
+      method: 'PUT',
+      headers: { 'Content-Type': file.type || 'application/octet-stream' },
+      body: file
+    })
+    if (!res.ok) {
+      const body = await res.json().catch(() => ({}))
+      throw new ApiError(body.error ?? `request failed (${res.status})`, res.status)
+    }
+    return (await res.json()) as { photo: OsintPhotoMeta }
+  },
+  deleteGuestPhoto: (id: string) => req<{ ok: true }>(`/customers/${id}/photo`, { method: 'DELETE' }),
 
   registerCardFor: (cardUid: string, playerId: string, pin?: string) =>
     post<{ card: Card }>('/cards', { cardUid, playerId, ...(pin ? { pin } : {}) }),

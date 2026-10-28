@@ -21,6 +21,7 @@
     "import:vouchers": "tsx --env-file-if-exists=.env src/db/importVouchers.ts"
   },
   "dependencies": {
+    "@vladmandic/face-api": "^1.7.15",
     "better-sqlite3": "^12.2.0",
     "cookie-parser": "^1.4.7",
     "express": "^5.1.0",

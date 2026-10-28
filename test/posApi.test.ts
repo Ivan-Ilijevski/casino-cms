@@ -333,6 +333,124 @@ describe('POST /api/pos/confirm', () => {
   })
 })
 
+describe('the card slip on POST /api/pos/confirm', () => {
+  test('describes the bar sale that was charged', async () => {
+    const agent = await loginAs('barman')
+    const intent = await makeIntent(agent, { forcePin: false })
+
+    const res = await agent.post('/api/pos/confirm').send({ intentId: intent.body.intentId })
+
+    expect(res.body.slip).toMatchObject({
+      address: DEFAULT_CONFIG.receiptAddress,
+      playerName: 'Иван Илијевски',
+      direction: 'debit',
+      pay: 'cash',
+      amountDeni: 16000,
+      label: null,
+      orderNumber: res.body.number,
+      reference: intent.body.intentId.replace(/-/g, '').slice(0, 8).toUpperCase(),
+      pinVerified: false,
+      staff: 'barman',
+      balanceBeforeDeni: 100000,
+      pointsBefore: 0,
+      balanceDeni: 84000,
+      points: 0
+    })
+    expect(typeof res.body.slip.orderNumber).toBe('number')
+    expect(Number.isNaN(Date.parse(res.body.slip.at))).toBe(false)
+  })
+
+  test('shows only the last four digits of the canonical card UID', async () => {
+    const agent = await loginAs('barman')
+    // Tapped in the Web NFC spelling; the slip prints the canonical one.
+    const intent = await makeIntent(agent, { forcePin: false })
+
+    const res = await agent.post('/api/pos/confirm').send({ intentId: intent.body.intentId })
+
+    expect(res.body.slip.card).toBe('**** 5AF4')
+    expect(JSON.stringify(res.body.slip)).not.toContain('9C76')
+  })
+
+  test('says the PIN was checked only when it was', async () => {
+    const agent = await loginAs('barman')
+    const intent = await makeIntent(agent, { forcePin: true })
+
+    const res = await agent
+      .post('/api/pos/confirm')
+      .send({ intentId: intent.body.intentId, pin: '1234' })
+
+    expect(res.body.slip.pinVerified).toBe(true)
+  })
+
+  test('a chip payout is a credit with its label and no order', async () => {
+    const agent = await loginAs('barman')
+    const intent = await makeIntent(agent, {
+      customAmountDeni: 50000,
+      direction: 'credit',
+      label: 'Чипови'
+    })
+
+    const res = await agent
+      .post('/api/pos/confirm')
+      .send({ intentId: intent.body.intentId, pin: '1234' })
+
+    expect(res.body.slip).toMatchObject({
+      direction: 'credit',
+      amountDeni: 50000,
+      label: 'Чипови',
+      orderNumber: null,
+      pinVerified: true,
+      balanceBeforeDeni: 100000,
+      balanceDeni: 150000
+    })
+  })
+
+  test('an unset address is null rather than a blank line', async () => {
+    const blankApp = createStaffApp({
+      db,
+      config: { ...DEFAULT_CONFIG, sessionSecret: 'test-secret', receiptAddress: '  ' },
+      events,
+      pushes,
+      posPinDecision: () => false
+    })
+    const agent = request.agent(blankApp)
+    await agent.post('/api/login').send({ username: 'barman', password: PASSWORD })
+    const intent = await makeIntent(agent)
+
+    const res = await agent.post('/api/pos/confirm').send({ intentId: intent.body.intentId })
+
+    expect(res.body.slip).toMatchObject({ address: null })
+  })
+
+  test('stamps the slip with the server clock', async () => {
+    const at = new Date('2026-09-16T19:40:12.000Z')
+    const clockApp = createStaffApp({
+      db,
+      config: { ...DEFAULT_CONFIG, sessionSecret: 'test-secret' },
+      events,
+      pushes,
+      posPinDecision: () => false,
+      now: () => at
+    })
+    const agent = request.agent(clockApp)
+    await agent.post('/api/login').send({ username: 'barman', password: PASSWORD })
+    const intent = await makeIntent(agent)
+
+    const res = await agent.post('/api/pos/confirm').send({ intentId: intent.body.intentId })
+
+    expect(res.body.slip.at).toBe(at.toISOString())
+  })
+
+  test('is never kept — confirming issues no receipt and stores nothing of the slip', async () => {
+    const agent = await loginAs('barman')
+    const intent = await makeIntent(agent, { forcePin: false })
+
+    await agent.post('/api/pos/confirm').send({ intentId: intent.body.intentId })
+
+    expect(db.prepare('SELECT COUNT(*) AS n FROM receipts').get()).toEqual({ n: 0 })
+  })
+})
+
 describe('POST /api/cards/:id/pin', () => {
   test('an admin can set a PIN', async () => {
     const agent = await loginAs('admin')

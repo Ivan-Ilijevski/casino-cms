@@ -53,7 +53,17 @@ export class PushRegistry {
     return this.send(sid, { t: 'balance_push', id: 0, d: { balance: balanceDeni, points } })
   }
 
+
   pushLogout(sid: string): boolean {
     return this.send(sid, { t: 'logout_push', id: 0, d: {} })
+  }
+
+  /**
+   * Tells the terminal an order moved, so its countdown ring follows the bar.
+   * `d` is built by orderPushData so the push, the order_res and the resync
+   * replay cannot drift apart.
+   */
+  pushOrder(sid: string, d: Record<string, any>): boolean {
+    return this.send(sid, { t: 'order_push', id: 0, d: { ok: true, sid, ...d } })
   }
 }

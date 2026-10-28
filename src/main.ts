@@ -1,5 +1,7 @@
 import { loadConfig } from './config.js'
 import { openDb } from './db/index.js'
+import { createCliOsintRunner } from './domain/osintEngines.js'
+import { failInterruptedRuns } from './domain/osintRuns.js'
 import { sweepIdleSessions } from './domain/sessions.js'
 import { CmsEvents } from './events.js'
 import { createStaffApp } from './http/server.js'
@@ -10,6 +12,10 @@ async function main(): Promise<void> {
   const config = loadConfig()
   const db = openDb(config.dbPath)
   const events = new CmsEvents()
+
+  // An AI screening lives in this process; one still marked running was cut off by a restart.
+  const interrupted = failInterruptedRuns(db)
+  const osint = createCliOsintRunner(config)
 
   // 1) The SMIB terminal link — drop-in for tools/host_sim/cms_server.py.
   const tcp = new CmsTcpServer(
@@ -38,7 +44,7 @@ async function main(): Promise<void> {
   const voucherServer = voucherApp.listen(config.voucherPort)
 
   // 3) The staff dashboard.
-  const staffApp = createStaffApp({ db, config, events, pushes: tcp })
+  const staffApp = createStaffApp({ db, config, events, pushes: tcp, osint })
   const staffServer = staffApp.listen(config.httpPort)
 
   // Server-side idle logout, in case a terminal dies holding a session open.
@@ -58,6 +64,11 @@ async function main(): Promise<void> {
   console.log(`  legacy voucher API  : http://localhost:${config.voucherPort}`)
   console.log(`  staff app           : http://localhost:${config.httpPort}`)
   console.log(`  database            : ${config.dbPath}`)
+  const engines = osint.available()
+  console.log(
+    `  AI screening        : claude ${engines.claude ? 'ready' : 'unavailable'}, codex ${engines.codex ? 'ready' : 'unavailable'}` +
+      (interrupted ? ` (${interrupted} interrupted run(s) marked failed)` : '')
+  )
   if (config.sessionSecret === 'change-me-in-production') {
     console.warn('  WARNING: CMS_SESSION_SECRET is still the default — set it before production.')
   }

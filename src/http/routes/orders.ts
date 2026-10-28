@@ -6,7 +6,7 @@ import {
   setOrderStatus,
   type OrderStatus
 } from '../../domain/orders.js'
-import { pushBalanceForCard, type StaffDeps } from '../deps.js'
+import { pushBalanceForCard, pushOrderForOrder, type StaffDeps } from '../deps.js'
 
 const STATUSES: OrderStatus[] = ['received', 'accepted', 'fulfilled', 'cancelled']
 
@@ -70,7 +70,10 @@ export function ordersRouter(deps: StaffDeps): Router {
     // A refund changed the balance — tell the terminal before the player notices.
     if (result.refunded) pushBalanceForCard(deps, result.order.card_id)
 
+    // The bar screen hears this over SSE; the guest's terminal hears it as an
+    // order_push, which is what moves their countdown ring.
     deps.events.emit('order.updated', { orderId: req.params.id })
+    pushOrderForOrder(deps, req.params.id)
     res.json({ order: result.order, refunded: result.refunded })
   })
 

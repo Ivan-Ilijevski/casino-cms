@@ -20,7 +20,13 @@ const ACTION_MK: Record<string, string> = {
   'player.note_delete': 'Избришана белешка',
   'player.tag': 'Додадена ознака',
   'player.untag': 'Отстранета ознака',
-  'osint.lookup': 'Отворен јавен извор'
+  'osint.lookup': 'Отворен јавен извор',
+  'osint.ai_run': 'AI проверка од јавни извори',
+  'osint.ai_delete': 'Избришан AI извештај',
+  'osint.image_delete': 'Избришана фотографија од профил',
+  'osint.face_compare': 'Споредба на лица',
+  'player.photo_set': 'Зачувана фотографија (со согласност)',
+  'player.photo_delete': 'Избришана фотографија на гостин'
 }
 
 export function Audit() {
@@ -63,7 +69,7 @@ export function Audit() {
             {rows.map((r, i) => (
               <tr
                 key={r.id}
-                className={r.action === 'osint.lookup' ? 'audit-osint' : ''}
+                className={r.action.startsWith('osint.') ? 'audit-osint' : ''}
                 style={{ '--i': Math.min(i, 12) } as React.CSSProperties}
               >
                 <td className="muted">{fmtDateTime(r.created_at)}</td>

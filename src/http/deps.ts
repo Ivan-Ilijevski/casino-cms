@@ -3,6 +3,9 @@ import type { Config } from '../config.js'
 import type { Db } from '../db/index.js'
 import { activeSessionForCard } from '../domain/sessions.js'
 import { balanceOf } from '../domain/ledger.js'
+import { getOrder } from '../domain/orders.js'
+import { orderPushData } from '../wire/handlers.js'
+import type { OsintRunner } from '../domain/osintEngines.js'
 import type { CmsEvents } from '../events.js'
 import type { TerminalLink } from '../wire/tcpServer.js'
 
@@ -20,6 +23,11 @@ export function param(req: Request, name: string): string {
 export interface Pusher {
   pushBalance(sid: string, balanceDeni: number, points: number): boolean
   pushLogout(sid: string): boolean
+  /**
+   * Optional for the same reason listLinks is: every existing stub, and every
+   * test app built with no TCP server, still satisfies this interface.
+   */
+  pushOrder?(sid: string, d: Record<string, unknown>): boolean
   /**
    * Live socket state for the machines view. Optional so every existing stub --
    * and every test app built with no TCP server at all -- still satisfies this
@@ -55,6 +63,12 @@ export interface StaffDeps {
    * counted on, which is the one thing a daily sequence must not allow.
    */
   now?: () => Date
+  /**
+   * Runs AI screening engines (the claude/codex CLIs). Production passes
+   * createCliOsintRunner; tests inject a fake. Unset means no engine is
+   * available, so no test app can ever spawn a real CLI by accident.
+   */
+  osint?: OsintRunner
 }
 
 /**
@@ -71,4 +85,23 @@ export function pushBalanceForCard(deps: StaffDeps, cardId: string): void {
     balanceOf(deps.db, cardId, 'deni'),
     balanceOf(deps.db, cardId, 'points')
   )
+}
+
+/**
+ * Tells the terminal an order moved, so the guest's countdown ring follows
+ * what the bar just did.
+ *
+ * Resolved through the CARD rather than orders.session_id: the order may have
+ * been placed in a session that has since closed, or at the POS with no
+ * session at all, and what matters is who is holding the card now. Nobody
+ * holding it means nothing is sent -- the terminal repairs that by re-asking
+ * on its next auth or link-up.
+ */
+export function pushOrderForOrder(deps: StaffDeps, orderId: string): void {
+  if (!deps.pushes?.pushOrder) return
+  const order = getOrder(deps.db, orderId)
+  if (!order) return
+  const session = activeSessionForCard(deps.db, order.card_id)
+  if (!session) return
+  deps.pushes.pushOrder(session.sid, orderPushData(deps.db, order))
 }

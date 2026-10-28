@@ -564,5 +564,183 @@ export const migrations: Migration[] = [
       -- must not be able to fail because of a reporting feature.
       ALTER TABLE sessions ADD COLUMN machine_id TEXT;
     `
+  },
+  {
+    // A fiscal receipt used to be rendered, sent to the printer and forgotten: the
+    // receipts row said a number was issued, not what the paper said, and its lines
+    // came from the browser. A reprint had nothing to reprint from.
+    //
+    // `png` is the render exactly as the API returned it, so a reprint is the same
+    // document byte for byte -- including whatever date and time the render service
+    // stamped -- and still works while that service is down. It is never the
+    // КОПИЈА-marked image: the band is drawn in the browser, per print, from this.
+    // `items` is the JSON lines that were sent to the render API alongside it.
+    //
+    // Both are NULL on receipts from before this release; those re-render once from
+    // their order and are stored then (domain/receiptHistory.ts).
+    //
+    // receipt_prints is the print log. rendered_at only ever meant "the render API
+    // answered", which happens before a single byte goes over Bluetooth, so whether a
+    // receipt reached the printer was unrecorded. The tablet reports each attempt:
+    // 'sending' when it starts, then how it ended. A row left in 'sending' is a tablet
+    // that died mid-print and is shown as unconfirmed, never guessed at.
+    //
+    // `copy` is decided by the server when the attempt starts -- an earlier attempt
+    // reached 'sent' -- and says whether the paper carried the КОПИЈА band. A retry
+    // after an interrupted print is still the original, because no whole original
+    // ever came out.
+    //
+    // The foreign key is fine here, unlike sessions.machine_id: nothing in the money
+    // path writes this table, and releaseReceiptNumber only deletes receipts that
+    // never rendered, which no print can exist for.
+    name: '014_receipt_history',
+    sql: `
+      ALTER TABLE receipts ADD COLUMN items TEXT;
+      ALTER TABLE receipts ADD COLUMN png BLOB;
+
+      CREATE TABLE receipt_prints (
+        id          INTEGER PRIMARY KEY AUTOINCREMENT,
+        receipt_id  INTEGER NOT NULL REFERENCES receipts(id),
+        copy        INTEGER NOT NULL CHECK (copy IN (0, 1)),
+        actor       TEXT    NOT NULL,
+        device      TEXT,
+        status      TEXT    NOT NULL DEFAULT 'sending'
+                      CHECK (status IN ('sending','sent','interrupted','failed')),
+        percent     INTEGER CHECK (percent IS NULL OR percent BETWEEN 0 AND 100),
+        error       TEXT,
+        started_at  TEXT    NOT NULL DEFAULT (datetime('now')),
+        finished_at TEXT
+      );
+      CREATE INDEX idx_receipt_prints_receipt ON receipt_prints(receipt_id);
+    `
+  },
+  {
+    // AI screening on the guest Истражување tab. Until now that tab was a link
+    // launcher and the CMS stored nothing but the fact a link was opened. The
+    // AI run is different in kind: the server hands guest details to Claude
+    // and/or Codex, and what comes back IS the due-diligence record an AML
+    // file wants kept. So reports are stored -- admin-only, and deletable
+    // outright when a run turned out to be noise. Deleting removes the report;
+    // the audit_log entries that a run happened, and was deleted, stay.
+    //
+    // `subject` is the JSON snapshot of exactly what was disclosed to the
+    // engines, taken when the run started, so a later edit to the guest cannot
+    // rewrite what the record says was sent.
+    //
+    // One results row per engine, so a run on both can finish half-failed and
+    // still show the half that worked. ON DELETE CASCADE is what makes deleting
+    // a run one statement; foreign_keys is ON in every connection (db/index.ts).
+    name: '015_osint_runs',
+    sql: `
+      CREATE TABLE osint_runs (
+        id          TEXT PRIMARY KEY,
+        player_id   TEXT NOT NULL REFERENCES players(id),
+        actor       TEXT NOT NULL,
+        reason      TEXT NOT NULL,
+        engines     TEXT NOT NULL CHECK (engines IN ('claude','codex','both')),
+        status      TEXT NOT NULL DEFAULT 'running'
+                      CHECK (status IN ('running','done','failed')),
+        subject     TEXT NOT NULL,
+        merged      TEXT,
+        created_at  TEXT NOT NULL DEFAULT (datetime('now')),
+        finished_at TEXT
+      );
+      CREATE INDEX idx_osint_runs_player ON osint_runs(player_id, created_at);
+
+      CREATE TABLE osint_engine_results (
+        run_id      TEXT NOT NULL REFERENCES osint_runs(id) ON DELETE CASCADE,
+        engine      TEXT NOT NULL CHECK (engine IN ('claude','codex')),
+        status      TEXT NOT NULL DEFAULT 'running'
+                      CHECK (status IN ('running','done','failed')),
+        report      TEXT,
+        queries     TEXT NOT NULL DEFAULT '[]',
+        cost_usd    REAL,
+        error       TEXT,
+        started_at  TEXT NOT NULL DEFAULT (datetime('now')),
+        finished_at TEXT,
+        PRIMARY KEY (run_id, engine)
+      );
+    `
+  },
+  {
+    // The general profile ("Општ профил") reason, which collects photos.
+    //
+    // osint_images: photos a profile run found, DOWNLOADED rather than linked,
+    // because social-media image URLs are signed and expire within days. This is
+    // the first place the CMS server itself fetches arbitrary URLs, so the
+    // downloader (domain/osintImages.ts) only connects to public addresses —
+    // the slot machines share this LAN — accepts only JPEG/PNG/GIF/WebP by magic
+    // bytes, and caps size and count. Rows are kept for failed downloads too,
+    // so the report can say what it could not fetch. Deleting a run cascades.
+    //
+    // face_*: the 1:1 comparison of each photo against the guest's own reference
+    // photo, computed in the admin's browser. Only the outcome is stored; face
+    // descriptors never leave the browser's memory.
+    //
+    // player_photos: that reference photo. Using a face to recognise someone is
+    // special-category biometric processing under the data protection law, and
+    // the lawful basis here is the guest's explicit consent — so the row cannot
+    // exist without consent_by, which the API refuses to fill in unasked.
+    name: '016_osint_profile',
+    sql: `
+      CREATE TABLE osint_images (
+        id               INTEGER PRIMARY KEY AUTOINCREMENT,
+        run_id           TEXT NOT NULL REFERENCES osint_runs(id) ON DELETE CASCADE,
+        origin           TEXT NOT NULL CHECK (origin IN ('report','account')),
+        image_url        TEXT,
+        page_url         TEXT NOT NULL,
+        description      TEXT,
+        match_confidence TEXT NOT NULL CHECK (match_confidence IN ('low','medium','high')),
+        engines          TEXT NOT NULL DEFAULT '[]',
+        status           TEXT NOT NULL CHECK (status IN ('stored','failed')),
+        content_type     TEXT,
+        bytes            BLOB,
+        sha256           TEXT,
+        error            TEXT,
+        face_verdict     TEXT CHECK (face_verdict IN ('match','possible','different','no_face')),
+        face_distance    REAL,
+        faces            INTEGER,
+        face_checked_at  TEXT,
+        created_at       TEXT NOT NULL DEFAULT (datetime('now'))
+      );
+      CREATE INDEX idx_osint_images_run ON osint_images(run_id);
+
+      CREATE TABLE player_photos (
+        player_id    TEXT PRIMARY KEY REFERENCES players(id),
+        content_type TEXT NOT NULL,
+        bytes        BLOB NOT NULL,
+        sha256       TEXT NOT NULL,
+        consent_by   TEXT NOT NULL,
+        consent_at   TEXT NOT NULL DEFAULT (datetime('now'))
+      );
+    `
+  },
+  {
+    // A live log of what each AI engine is doing — searches, pages opened,
+    // result counts, its own narration — so a run that is thinking for a minute
+    // does not look identical to one that has hung. JSON array of
+    // {t, kind, text}, appended as the CLI streams, capped in osintRuns.ts.
+    // `queries` stays as the plain search list the report has always shown.
+
+    name: '017_osint_activity',
+    sql: `
+      ALTER TABLE osint_engine_results ADD COLUMN activity TEXT NOT NULL DEFAULT '[]';
+    `
+  },
+  {
+    // How long an order containing this drink actually takes, learned from
+    // fulfilled orders, so the terminal can promise the guest something real
+    // the moment the order is placed -- before the bar has accepted it.
+    //
+    // avg_prep_s NULL means "never timed"; every reader falls back to the
+    // module default rather than treating NULL as zero. Additive on
+    // menu_items for the reason 011 was additive on orders: order_items and
+    // pos_intents both point at drink_id, and rebuilding that table under
+    // foreign_keys would be a far bigger change than the feature deserves.
+    name: '018_menu_prep_stats',
+    sql: `
+      ALTER TABLE menu_items ADD COLUMN avg_prep_s   INTEGER;
+      ALTER TABLE menu_items ADD COLUMN prep_samples INTEGER NOT NULL DEFAULT 0;
+    `
   }
 ]

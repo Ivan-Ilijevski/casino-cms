@@ -49,11 +49,21 @@ src/
 │   ├── points.ts        # Loyalty point calculation
 │   ├── receipt.ts        # Fiscal receipt render request
 │   ├── receiptNumbers.ts # Daily receipt numbering
+│   ├── receiptHistory.ts # Stored receipts, reprints, print log
+│   ├── paymentSlip.ts   # Guest's card slip facts (not fiscal, never stored)
 │   ├── businessDay.ts   # Local-day boundary (IANA zone)
 │   ├── uid.ts           # Card UID normalisation (canonUid)
 │   ├── staffUsers.ts    # Staff user CRUD
 │   ├── customers.ts     # Customer/player management
 │   ├── password.ts      # Scrypt password hashing
+│   ├── translit.ts      # Macedonian Cyrillic ↔ Latin name spellings (search only)
+│   ├── osintSubject.ts  # What an AI screening may disclose (never doc_id)
+│   ├── osintPrompt.ts   # Screening prompt, strict report schema, sanitizeReport
+│   ├── osintEngines.ts  # Headless claude/codex CLI runner (web tools only)
+│   ├── osintMerge.ts    # Deterministic cross-check of two engines' reports
+│   ├── osintRuns.ts     # Stored runs, link-lookup history
+│   ├── osintScreening.ts # Background run driver, cancel on delete
+│   ├── osintImages.ts   # Fenced photo downloader for profile runs (public IPs only)
 │   └── audit.ts         # Audit log
 ├── wire/                # Firmware protocol layer
 │   ├── mux.ts           # Mux framing (0x7E sync, CRC-16/KERMIT)
@@ -71,8 +81,10 @@ src/
 │       ├── customers.ts
 │       ├── menu.ts
 │       ├── orders.ts
+│       ├── osint.ts     # Link-lookup audit + AI screening runs
 │       ├── players.ts
 │       ├── pos.ts
+│       ├── receipts.ts  # Receipt history, image, print log
 │       ├── reports.ts
 │       ├── tickets.ts
 │       └── users.ts
@@ -81,11 +93,15 @@ web/                     # Staff SPA (Vite + React)
 │   ├── main.tsx         # React entry, SW unregistration
 │   ├── App.tsx          # Router, role-gated views
 │   ├── api.ts           # Fetch wrapper for all /api/* calls
-│   ├── printer.ts       # Web Bluetooth thermal printer (X5/X5h)
+│   ├── printer.ts       # Web Bluetooth thermal printer (X5/X5h), auto-reconnect
+│   ├── receiptPrint.ts  # Logged print path + КОПИЈА band, shared by POS and history
+│   ├── paymentSlip.ts   # Draws the Ingenico-style card slip above a receipt
 │   ├── webnfc.ts        # Web NFC card reader
 │   ├── fullscreen.ts    # Fullscreen API for kiosk mode
 │   ├── roles.ts         # Role constants
 │   ├── format.ts        # Currency/date formatting
+│   ├── osint.ts         # OSINT link-launcher source registry
+│   ├── faceMatch.ts     # In-browser 1:1 face comparison (lazy face-api)
 │   ├── styles.css       # Single CSS file
 │   ├── views/           # Page-level components
 │   └── components/      # Shared UI components
@@ -196,6 +212,76 @@ The `receipts` table is the counter — `MAX(seq) WHERE day = ?`. A failed rende
 gives its number back to keep the sequence dense. The day boundary uses ICU
 `Intl.DateTimeFormat`, not UTC offsets.
 
+Each receipt stores its rendered PNG and lines (`receipts.png`/`items`); reprints use
+the stored image, never a fresh render. Receipt lines are read from `order_items` +
+`menu_items`, not from the request. `receipt_prints` is the per-attempt print log the
+tablet reports (`sending` → `sent`/`interrupted`/`failed`); the server decides whether
+a print is a КОПИЈА (an earlier attempt reached `sent`) and audits it as
+`receipt.reprint`. `rendered_at` is not "printed".
+
+## Card payment slip
+
+Every POS card payment prints an Ingenico-style slip for the guest (logo, address,
+ПРОДАЖБА/ИСПЛАТА, date, masked card, contactless and PIN, guest, operator, order and
+reference, amount, balances before and after). Its lines pack two facts each, and a
+label steps down to a shorter spelling when a line overflows (`web/src/paymentSlip.ts`). A
+bar sale prints it above the fiscal receipt in one job, and Наплата/Исплата prints it
+alone. The slip is **not fiscal**: it is never stored, numbered, logged, or КОПИЈА-banded.
+Its facts arrive only in the `/pos/confirm` response (`src/domain/paymentSlip.ts`), and
+the tablet draws them at print time. A reprint from Сметки is the fiscal receipt alone.
+
+## OSINT (guest Истражување tab)
+
+Admin-only, and every action needs a reason (`kyc`/`aml`/`self_exclusion`/`dispute`/`other`).
+
+- **Link tiles** open public sites in the browser. The server fetches nothing; it
+  audits `osint.lookup` before the tab is allowed to navigate. Source ids key the
+  audit history — never rename one.
+- **AI screening** runs the `claude` and/or `codex` CLI **on the CMS host**, headless,
+  on that host's own login (`claude login` / `codex login`). Each run is stored in
+  `osint_runs` + `osint_engine_results` until an admin deletes it; start and delete
+  are audited (`osint.ai_run`, `osint.ai_delete`), the findings are not copied into
+  the audit log.
+
+Invariants:
+- `doc_id` is never disclosed to an engine — `buildSubject` does not read it.
+- Engines get web tools only. Claude: `--tools WebSearch,WebFetch --safe-mode
+  --strict-mcp-config`. Codex: `--disable shell_tool --disable unified_exec`,
+  read-only sandbox, `--ignore-user-config`. Web pages are untrusted input; don't
+  loosen these flags.
+- `sanitizeReport` drops findings without an http(s) source; a match verdict with no
+  surviving findings becomes `insufficient_data`.
+- Cross-checking is plain code (`osintMerge.ts`), not a third model call.
+- Suggested tags (`pep`, `sanctions_hit`, `watchlist`) are applied only by an admin's
+  click, and only if that run suggested them.
+- A run is driven in-process; `failInterruptedRuns` marks leftovers failed at boot.
+- Each engine's stdout is parsed into a live **activity log** (`osint_engine_results.activity`,
+  migration 017): searches, pages opened, result counts, the engine's narration. Codex
+  web_search actions come in several shapes — `search` with `query` *or* a batched
+  `queries[]`, `open_page`, `find_in_page` — and all must be read, or its runs look frozen.
+- Tests never spawn a real CLI: `StaffDeps.osint` is unset unless injected.
+
+**General profile** (reason `profile`, "Општ профил"): a broader prompt
+(`buildProfilePrompt`) — online accounts, work, education, business, media,
+interests, risk — plus photos. Same out-of-scope list as screening (`OUT_OF_SCOPE`
+in `osintPrompt.ts`): no special categories, home address/whereabouts, relatives,
+leaked data, people-search sites or login-walled content. Uses its own limits
+(`CMS_OSINT_PROFILE_*`).
+
+- **Photos are downloaded** (`osint_images`, migration 016) by `osintImages.ts`, the
+  only code that fetches engine-supplied URLs. Invariants: connect only to public
+  addresses (checked inside the socket's DNS lookup, so DNS rebinding can't reach the
+  LAN), http/https on default ports, ≤3 re-checked redirects, 10 s/request, 5 MB cap,
+  stored only if the bytes are JPEG/PNG/GIF/WebP (never SVG), ≤12 per run, and only
+  for medium/high-confidence pages. Attribution is by the page, not the face.
+- **Face comparison is 1:1** against the guest's reference photo (`player_photos`),
+  which the API refuses to store without `?consent=1` and records who took consent.
+  It runs in the admin's browser (`web/src/faceMatch.ts`); only verdict + distance
+  reach the server, never descriptors. `/api/face-models` serves an allowlist —
+  detector, landmarks, recognition — and deliberately not the age/gender/expression
+  models. Results are advisory and never apply tags. No reverse face search, and faces
+  are never sent to the AI engines.
+
 ## Configuration
 
 All config via environment variables (see `.env.example`). Key ones:
@@ -209,6 +295,11 @@ All config via environment variables (see `.env.example`). Key ones:
 | `CMS_TIME_ZONE` | IANA zone for fiscal day boundary | `Europe/Skopje` |
 | `CMS_RECEIPT_API_URL` | External receipt-render service origin | (empty) |
 | `CMS_DB_PATH` | SQLite file path | `./data/cms.sqlite` |
+| `CMS_OSINT_CLAUDE_BIN` / `CMS_OSINT_CODEX_BIN` | AI screening CLIs; empty disables | `claude` / `codex` |
+| `CMS_OSINT_CLAUDE_MODEL` / `CMS_OSINT_CODEX_MODEL` | `--model` per engine | `sonnet` / (CLI default) |
+| `CMS_OSINT_TIMEOUT_MS` | Per-engine run timeout | `480000` |
+| `CMS_OSINT_CLAUDE_MAX_USD` | Claude `--max-budget-usd` per run | `2` |
+| `CMS_OSINT_PROFILE_TIMEOUT_MS` / `CMS_OSINT_PROFILE_CLAUDE_MAX_USD` | Same limits for general-profile runs | `900000` / `5` |
 
 ## Testing conventions
 

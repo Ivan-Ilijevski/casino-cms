@@ -15,6 +15,10 @@ export interface MenuItemRow {
   /** Whether this drink counts toward turnover from Macedonian producers on the receipt. */
   is_domestic: number
   updated_at: string
+  /** Learned seconds an order with this drink takes. NULL = never timed. */
+  avg_prep_s: number | null
+  /** How many fulfilled orders that average is built from. */
+  prep_samples: number
 }
 
 /** Exactly the shape the firmware's parse_menu() expects. */
@@ -26,6 +30,12 @@ export interface WireMenuItem {
   /** 0 = not purchasable with points. */
   points_price: number
   avail: boolean
+  /**
+   * Learned seconds an order with this drink takes, so the terminal can show
+   * the wait on the drink list. Absent for a drink nobody has timed yet; the
+   * firmware reads a missing value as 0 and shows no time at all.
+   */
+  avg_s?: number
 }
 
 /** Every item, for the staff app. */
@@ -57,6 +67,7 @@ export function wireMenu(db: Db): WireMenuItem[] {
       name: row.name,
       price: row.price_deni,
       points_price: row.points_price,
-      avail: row.available === 1 && row.stock_qty !== 0
+      avail: row.available === 1 && row.stock_qty !== 0,
+      ...(row.avg_prep_s ? { avg_s: row.avg_prep_s } : {})
     }))
 }

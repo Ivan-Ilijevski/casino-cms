@@ -17,6 +17,8 @@ import {
   pairPrinter,
   PrinterJobError,
   printerState,
+  RASTER_WIDTH,
+  reconnectPrinter,
   printPng,
   subscribePrinter,
   type PrinterSupport
@@ -96,16 +98,6 @@ export function Settings() {
     </>
   )
 }
-
-/**
- * The printer's native raster width in dots — the full head of an X5/X5h at 203dpi.
- *
- * `preparePngImage()` rescales anything that is not exactly this wide before it
- * Atkinson-dithers it, and a rescaled bitmap turns crisp glyphs into grey mush. So
- * the test page is authored at 384px and drawn in pure black on white: no greys, no
- * hairlines, and type big enough that the dither cannot eat it.
- */
-const RASTER_WIDTH = 384
 
 /** Short enough not to waste a strip of paper on every tap. */
 const TEST_PAGE_HEIGHT = 120
@@ -190,17 +182,20 @@ function PrinterCard() {
     try {
       await printPng(await testPagePng())
     } catch (e) {
-      // A failed transfer has already put describePrinterError() in the store, so
-      // repeating it here would stack two lines saying the same thing. What never
-      // reaches the store is a 'not-connected' throw or a canvas that gave us no
-      // blob — this line exists for those, and to keep the rejection handled.
-      const spoken = e instanceof PrinterJobError && e.kind === 'transfer-failed'
+      // A failed or cut-off transfer has already put describePrinterError() in the
+      // store, so repeating it here would stack two lines saying the same thing. What
+      // never reaches the store is a 'not-connected' or 'busy' throw, or a canvas that
+      // gave us no blob — this line exists for those, and to keep the rejection handled.
+      const spoken = e instanceof PrinterJobError && (e.kind === 'transfer-failed' || e.kind === 'link-lost')
       setErr(spoken ? '' : describePrinterError(e))
     }
   }
 
   const printing = state.status === 'printing'
   const linked = state.status === 'ready' || printing
+  // Still paired, just not on the link: the name stays on screen so it is clear which
+  // printer the tablet is waiting for.
+  const waiting = state.status === 'reconnecting' || state.status === 'offline'
 
   function controls() {
     // Nothing until the effect has probed; one paint without a button beats a button
@@ -212,6 +207,32 @@ function PrinterCard() {
         <button className="gold" disabled>
           Се поврзува…
         </button>
+      )
+    }
+    if (state.status === 'reconnecting') {
+      return (
+        <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+          <button className="gold" disabled>
+            Се поврзува повторно…
+          </button>
+          <button className="ghost" onClick={() => void disconnectPrinter()}>
+            Заборави
+          </button>
+        </div>
+      )
+    }
+    if (state.status === 'offline') {
+      // No chooser for the first: this is the printer already granted. The second is
+      // for when it is a different printer that is now at the bar.
+      return (
+        <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+          <button className="gold" onClick={() => void reconnectPrinter()}>
+            Поврзи повторно
+          </button>
+          <button className="ghost" onClick={pair}>
+            Спари друг
+          </button>
+        </div>
       )
     }
     if (linked) {
@@ -241,10 +262,16 @@ function PrinterCard() {
           <h3>Печатач</h3>
           <p className="muted">
             Bluetooth печатач за сметките на Каса. Мора да биде модел X5 или X5h.
-            Спарувањето важи само за оваа сесија на прелистувачот — по освежување
-            на страницата спарете го одново, бидејќи Web Bluetooth не може да ја
-            врати врската без нов допир од корисникот.
+            Ако печатачот се исклучи или излезе од домет, таблетот сам се поврзува
+            повторно. Спарувањето сепак важи само за оваа сесија на прелистувачот —
+            по освежување на страницата спарете го одново, бидејќи Web Bluetooth не
+            може да го врати уредот без нов допир од корисникот.
           </p>
+          {waiting && (
+            <div className="muted" style={{ fontSize: 13, marginTop: 6 }}>
+              Спарен, без врска: <strong className="mono">{state.deviceName ?? 'печатач без име'}</strong>
+            </div>
+          )}
           {linked && (
             <div className="muted" style={{ fontSize: 13, marginTop: 6 }}>
               Поврзан: <strong className="mono">{state.deviceName ?? 'печатач без име'}</strong>

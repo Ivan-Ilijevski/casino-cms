@@ -39,6 +39,23 @@ export interface Config {
    */
   receiptStoreName: string
   receiptAddress: string
+  /**
+   * AI screening on the guest Истражување tab runs the locally installed CLIs
+   * headless, on this host's own `claude login` / `codex login`. Empty disables
+   * that engine; a binary that is not on PATH shows as unavailable in the UI.
+   */
+  osintClaudeBin: string
+  osintCodexBin: string
+  /** Passed as --model. Empty lets the CLI pick its own default. */
+  osintClaudeModel: string
+  osintCodexModel: string
+  /** A run that has not answered by then is killed and recorded as failed. */
+  osintTimeoutMs: number
+  /** Claude's --max-budget-usd per engine run. Codex has no equivalent flag. */
+  osintClaudeMaxUsd: number
+  /** The same two limits for a general profile, which searches far wider than a screening. */
+  osintProfileTimeoutMs: number
+  osintProfileClaudeMaxUsd: number
 }
 
 export const DEFAULT_CONFIG: Config = {
@@ -56,7 +73,15 @@ export const DEFAULT_CONFIG: Config = {
   receiptApiUrl: '',
   receiptApiKey: '',
   receiptStoreName: 'РОЈАЛ КЛУБ ЗЕЛЕНЕЗБУРГ Д.О.О.',
-  receiptAddress: 'УЛ. 6 БР. 7'
+  receiptAddress: 'УЛ. 2 ББ ЗЕЛЕНИКОВО',
+  osintClaudeBin: 'claude',
+  osintCodexBin: 'codex',
+  osintClaudeModel: 'haiku',
+  osintCodexModel: '',
+  osintTimeoutMs: 8 * 60 * 1000,
+  osintClaudeMaxUsd: 2,
+  osintProfileTimeoutMs: 15 * 60 * 1000,
+  osintProfileClaudeMaxUsd: 5
 }
 
 function num(raw: string | undefined, fallback: number): number {
@@ -98,6 +123,14 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     receiptApiUrl: env.CMS_RECEIPT_API_URL ?? DEFAULT_CONFIG.receiptApiUrl,
     receiptApiKey: env.CMS_RECEIPT_API_KEY ?? DEFAULT_CONFIG.receiptApiKey,
     receiptStoreName: env.CMS_RECEIPT_STORE_NAME ?? DEFAULT_CONFIG.receiptStoreName,
-    receiptAddress: env.CMS_RECEIPT_ADDRESS ?? DEFAULT_CONFIG.receiptAddress
+    receiptAddress: env.CMS_RECEIPT_ADDRESS ?? DEFAULT_CONFIG.receiptAddress,
+    osintClaudeBin: (env.CMS_OSINT_CLAUDE_BIN ?? DEFAULT_CONFIG.osintClaudeBin).trim(),
+    osintCodexBin: (env.CMS_OSINT_CODEX_BIN ?? DEFAULT_CONFIG.osintCodexBin).trim(),
+    osintClaudeModel: (env.CMS_OSINT_CLAUDE_MODEL ?? DEFAULT_CONFIG.osintClaudeModel).trim(),
+    osintCodexModel: (env.CMS_OSINT_CODEX_MODEL ?? DEFAULT_CONFIG.osintCodexModel).trim(),
+    osintTimeoutMs: num(env.CMS_OSINT_TIMEOUT_MS, DEFAULT_CONFIG.osintTimeoutMs),
+    osintClaudeMaxUsd: num(env.CMS_OSINT_CLAUDE_MAX_USD, DEFAULT_CONFIG.osintClaudeMaxUsd),
+    osintProfileTimeoutMs: num(env.CMS_OSINT_PROFILE_TIMEOUT_MS, DEFAULT_CONFIG.osintProfileTimeoutMs),
+    osintProfileClaudeMaxUsd: num(env.CMS_OSINT_PROFILE_CLAUDE_MAX_USD, DEFAULT_CONFIG.osintProfileClaudeMaxUsd)
   }
 }

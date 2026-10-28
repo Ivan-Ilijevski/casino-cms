@@ -3,7 +3,7 @@ import { openTestDb, type Db } from '../src/db/index.js'
 import {
   allocateReceiptNumber,
   formatReceiptNumber,
-  markRendered,
+  storeRendered,
   releaseReceiptNumber,
   UnknownOrderError
 } from '../src/domain/receiptNumbers.js'
@@ -32,6 +32,12 @@ function seedOrder(id: string, number: number, pay: 'cash' | 'points' = 'cash'):
 
 function allocate(orderId: string, day = DAY) {
   return allocateReceiptNumber(db, { orderId, day, timeZone: TZ, actor: 'barman' })
+}
+
+/** What a successful render leaves behind: the lines sent and the PNG returned. */
+const RENDERED = {
+  items: [{ name: 'Кафе', quantity: 1, price: 80, vatType: 'A', isDomestic: true }],
+  png: Buffer.from([137, 80, 78, 71])
 }
 
 function count(): number {
@@ -137,22 +143,32 @@ describe('releaseReceiptNumber', () => {
 
   test('never takes back a number that reached paper', () => {
     const first = allocate(seedOrder('o1', 1))
-    markRendered(db, first.id)
+    storeRendered(db, first.id, RENDERED)
 
     expect(releaseReceiptNumber(db, first.id)).toBe(false)
     expect(count()).toBe(1)
   })
 })
 
-describe('markRendered', () => {
-  test('records that the number actually printed', () => {
+describe('storeRendered', () => {
+  test('records that the render came back, and keeps what it produced', () => {
     const n = allocate(seedOrder('o1', 1))
-    expect(db.prepare('SELECT rendered_at AS r FROM receipts').get()).toEqual({ r: null })
+    expect(db.prepare('SELECT rendered_at AS r, items, png FROM receipts').get()).toEqual({
+      r: null,
+      items: null,
+      png: null
+    })
 
-    markRendered(db, n.id)
+    storeRendered(db, n.id, RENDERED)
 
-    expect((db.prepare('SELECT rendered_at AS r FROM receipts').get() as { r: string }).r).toMatch(
-      /^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$/
-    )
+    const row = db.prepare('SELECT rendered_at AS r, items, png FROM receipts').get() as {
+      r: string
+      items: string
+      png: Buffer
+    }
+    expect(row.r).toMatch(/^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$/)
+    expect(JSON.parse(row.items)).toEqual(RENDERED.items)
+    // Byte for byte, so a reprint is the same document and not a fresh render.
+    expect(Buffer.compare(row.png, RENDERED.png)).toBe(0)
   })
 })

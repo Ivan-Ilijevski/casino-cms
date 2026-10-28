@@ -18,9 +18,13 @@
  *  - A resolved `printRasterImage()` means the *transfer* finished, not that paper
  *    came out. Every string here says "испратено"/"пратено", never "испечатено".
  *  - After a failed transfer the library refuses new jobs until `disconnect()` and a
- *    fresh connect, because a failed GATT write may already have been delivered. So
- *    the failure path tears the connection down and drops to `'idle'`, forcing a
- *    deliberate re-pair. Nothing here ever retries on its own.
+ *    fresh `connect()`, because a failed GATT write may already have been delivered.
+ *    That does NOT need a re-pair: `connect()` works again on the same instance, and
+ *    `device.gatt.connect()` on a device the chooser already granted needs no user
+ *    gesture — only `requestPrinter()` does. So a dropped link or a failed job keeps
+ *    the instance and reconnects to it in the background. What never happens on its
+ *    own is re-sending a job: part of the receipt may already be on paper, so a
+ *    reprint is always the operator's tap. A page reload still loses the instance.
  *  - `connect()` throws `PrinterBusyError` when it is already connected, so every
  *    path guards on `.connected` first.
  *  - Only lowercase `X5` / `X5h` names are accepted by the library; a device
@@ -52,6 +56,17 @@ import {
  * re-measuring on this hardware silently truncates a receipt.
  */
 const PRINTER_OPTIONS = { chunkSize: 182, delayMs: 50 } as const
+
+/**
+ * The printer's native raster width in dots — the full head of an X5/X5h at 203dpi.
+ *
+ * `preparePngImage()` rescales anything that is not exactly this wide before it
+ * Atkinson-dithers it, and a rescaled bitmap turns crisp glyphs into grey mush. So
+ * anything drawn in the browser for this printer is authored at this width, in pure
+ * black on white: no greys, no hairlines, and type big enough that the dither cannot
+ * eat it.
+ */
+export const RASTER_WIDTH = 384
 
 /** Print depth 1–5, 5 being darkest. Thermal paper at the bar fades fast. */
 const BLACKENING = 5
@@ -93,17 +108,30 @@ export function checkPrinterSupport(): PrinterSupport {
 // ---------------------------------------------------------------------- errors
 
 /**
+ * What went wrong with a job, as the POS needs to branch on it:
+ *  - `not-connected` — nothing was sent; there is no printer, or it did not come back.
+ *  - `busy` — nothing was sent; another receipt is still going out.
+ *  - `link-lost` — the printer dropped mid-transfer. Part of the receipt may be on paper.
+ *  - `transfer-failed` — the job failed some other way. Delivery is just as uncertain.
+ */
+export type PrinterJobKind = 'not-connected' | 'busy' | 'link-lost' | 'transfer-failed'
+
+/**
  * Raised by this module rather than by the library, so `Pos.tsx` can tell "nothing
  * is paired" apart from "the job failed" without matching on message text.
  */
 export class PrinterJobError extends Error {
+  /** How far the transfer got before it stopped, 0–100. 0 when nothing was sent. */
+  readonly percent: number
+
   constructor(
     message: string,
-    readonly kind: 'not-connected' | 'transfer-failed',
-    options?: ErrorOptions
+    readonly kind: PrinterJobKind,
+    options?: ErrorOptions & { percent?: number }
   ) {
     super(message, options)
     this.name = 'PrinterJobError'
+    this.percent = options?.percent ?? 0
   }
 }
 
@@ -130,7 +158,7 @@ export function describePrinterError(err: unknown): string {
     return 'Избраниот уред не е X5 печатач. Изберете уред со име X5 или X5h.'
   }
   if (err instanceof PrinterDisconnectedError) {
-    return 'Врската со печатачот се прекина. Вклучете го печатачот и спарете го повторно.'
+    return 'Врската со печатачот се прекина. Вклучете го печатачот — таблетот сам ќе се поврзе повторно.'
   }
   if (err instanceof BluetoothUnavailableError) {
     return 'Bluetooth не е достапен. Проверете дали е вклучен и дали страницата е отворена преку HTTPS.'
@@ -142,7 +170,7 @@ export function describePrinterError(err: unknown): string {
     return 'Печатачот не одговара. Проверете дали има хартија и дали не е преоптоварен.'
   }
   if (err instanceof PrinterProtocolError) {
-    return 'Печатачот ја одби сметката. Спарете го печатачот повторно и обидете се одново.'
+    return 'Печатачот ја одби сметката. Почекајте да се поврзе повторно и обидете се одново.'
   }
   if (err instanceof PrinterBusyError) {
     return 'Печатачот веќе извршува задача. Почекајте да заврши.'
@@ -157,7 +185,19 @@ export function describePrinterError(err: unknown): string {
 
 // ----------------------------------------------------------------------- store
 
-export type PrinterStatus = 'idle' | 'connecting' | 'ready' | 'printing' | 'error'
+/**
+ * `reconnecting` and `offline` both still hold the paired printer — its name stays in
+ * `deviceName` — but have no live link. `reconnecting` is working on it by itself;
+ * `offline` has given up and waits for „Поврзи повторно“, which needs no chooser.
+ */
+export type PrinterStatus =
+  | 'idle'
+  | 'connecting'
+  | 'ready'
+  | 'printing'
+  | 'reconnecting'
+  | 'offline'
+  | 'error'
 
 export interface PrinterState {
   status: PrinterStatus
@@ -204,6 +244,14 @@ function setState(patch: Partial<PrinterState>): void {
 let printer: TiMiniPrinter | null = null
 /** The `onDisconnected` unsubscribe, so a deliberate teardown stays quiet. */
 let offDisconnected: (() => void) | null = null
+/**
+ * Bumped whenever the paired printer is replaced or forgotten. A reconnect loop
+ * started for one pairing checks it after every await, so it can never bring back a
+ * printer the operator has since disconnected or swapped for another.
+ */
+let pairing = 0
+/** True from the moment a job starts until its outcome is settled. */
+let jobRunning = false
 
 /**
  * Drops the current instance. The listener is removed *before* `disconnect()` so a
@@ -213,6 +261,8 @@ let offDisconnected: (() => void) | null = null
  */
 async function discardPrinter(): Promise<void> {
   const current = printer
+  pairing++
+  reconnecting = null
   offDisconnected?.()
   offDisconnected = null
   printer = null
@@ -226,19 +276,119 @@ async function discardPrinter(): Promise<void> {
 
 /**
  * Fires when the printer is switched off, walks out of range, or drops the link
- * mid-shift. There is nothing to reconnect to without a new gesture, so the store
- * simply goes back to idle and says so.
+ * mid-shift — and also when a reconnect attempt fails partway through its setup.
+ *
+ * The chooser already granted this device, so nothing needs a gesture to reach it
+ * again: the store goes to `reconnecting` and tries by itself. A drop during a job is
+ * left to `printPng`, which has to report the interrupted receipt first.
  */
 function onLinkLost(): void {
-  if (!printer) return
-  offDisconnected = null
-  printer = null
-  setState({
-    status: 'idle',
-    deviceName: null,
-    percent: 0,
-    message: 'Печатачот се исклучи. Спарете го повторно за да печатите сметки.'
+  if (!printer || jobRunning) return
+  void startReconnect()
+}
+
+// ---------------------------------------------------------------- reconnecting
+
+/** Quick at first — a printer that blinked comes straight back — then steady. */
+const RECONNECT_DELAYS_MS = [1_000, 2_000, 4_000]
+const RECONNECT_STEADY_MS = 10_000
+/** Long enough to walk over and switch the printer back on; then stop draining the tablet. */
+const RECONNECT_GIVE_UP_MS = 120_000
+/** How long a print waits for a link that is on its way back before giving up. */
+const PRINT_WAIT_FOR_LINK_MS = 8_000
+
+const sleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms))
+
+/** The loop in flight, shared by everyone waiting on it. Resolves whether the link came back. */
+let reconnecting: Promise<boolean> | null = null
+
+const RECONNECTING_MESSAGE = 'Врската со печатачот се прекина. Се поврзува повторно…'
+
+/**
+ * Brings the paired printer back without the chooser.
+ *
+ * One loop at a time: a second caller gets the promise already running. `immediate`
+ * skips the first delay, for a caller that is standing at the printer — a tap on
+ * „Поврзи повторно“, or a print that found the link down.
+ *
+ * `connect()` is the library's full setup on the same instance, which also clears the
+ * "previous transfer failed" latch — exactly what it demands before the next job.
+ */
+function startReconnect(opts: { immediate?: boolean; message?: string } = {}): Promise<boolean> {
+  if (opts.message && state.status === 'reconnecting') setState({ message: opts.message })
+  if (reconnecting) return reconnecting
+
+  const target = printer
+  if (!target) return Promise.resolve(false)
+  const mine = pairing
+  const stillOurs = () => mine === pairing && printer === target
+
+  setState({ status: 'reconnecting', percent: 0, message: opts.message ?? RECONNECTING_MESSAGE })
+
+  const loop = (async (): Promise<boolean> => {
+    const started = Date.now()
+    for (let attempt = 0; ; attempt++) {
+      if (attempt > 0 || !opts.immediate) {
+        await sleep(RECONNECT_DELAYS_MS[attempt] ?? RECONNECT_STEADY_MS)
+      }
+      if (!stillOurs()) return false
+
+      if (!target.connected) {
+        try {
+          await target.connect()
+        } catch {
+          // Still off or out of range. The next lap tries again.
+        }
+      }
+      if (!stillOurs()) return false
+
+      if (target.connected) {
+        setState({ status: 'ready', percent: 0, message: 'Печатачот е повторно поврзан.' })
+        return true
+      }
+      if (Date.now() - started >= RECONNECT_GIVE_UP_MS) {
+        setState({
+          status: 'offline',
+          percent: 0,
+          message: 'Печатачот не се јавува. Вклучете го и притиснете „Поврзи повторно“.'
+        })
+        return false
+      }
+    }
+  })()
+
+  reconnecting = loop
+  void loop.finally(() => {
+    if (reconnecting === loop) reconnecting = null
   })
+  return loop
+}
+
+/**
+ * Reconnects to the printer paired earlier in this page's life, with no chooser —
+ * which is why a plain tap can call it with awaits before it. Resolves whether the
+ * link is back. With nothing paired there is nothing to reconnect to: that takes
+ * `pairPrinter()`.
+ */
+export function reconnectPrinter(): Promise<boolean> {
+  if (!printer) return Promise.resolve(false)
+  if (printer.connected) return Promise.resolve(true)
+  return startReconnect({ immediate: true })
+}
+
+/** Resolves true once the link is up, or false after `ms` — leaving any loop running. */
+async function waitForLink(ms: number): Promise<boolean> {
+  if (printer?.connected) return true
+  const back = reconnectPrinter()
+  let timer: ReturnType<typeof setTimeout> | undefined
+  const timeout = new Promise<false>((resolve) => {
+    timer = setTimeout(() => resolve(false), ms)
+  })
+  try {
+    return await Promise.race([back, timeout])
+  } finally {
+    clearTimeout(timer)
+  }
 }
 
 // --------------------------------------------------------------------- pairing
@@ -260,9 +410,10 @@ function onLinkLost(): void {
  */
 export async function pairPrinter(): Promise<void> {
   if (printer?.connected) return
-  // A stale instance has to go, but its disconnect() cannot be awaited here without
-  // spending the gesture, so it is dropped synchronously and closed in the
-  // background. discardPrinter() clears `printer` before its own first await.
+  // A stale instance — one still reconnecting, or given up on — has to go, but its
+  // disconnect() cannot be awaited here without spending the gesture, so it is dropped
+  // synchronously and closed in the background. discardPrinter() clears `printer` and
+  // cancels its reconnect loop before its own first await.
   if (printer) void discardPrinter()
 
   setState({
@@ -276,6 +427,8 @@ export async function pairPrinter(): Promise<void> {
     opened = await TiMiniPrinter.requestPrinter(PRINTER_OPTIONS)
     await opened.connect()
     printer = opened
+    // Once per instance: the library keeps this callback across every reconnect of
+    // the same printer, so subscribing again on reconnect would fire twice.
     offDisconnected = opened.onDisconnected(onLinkLost)
     setState({
       status: 'ready',
@@ -309,6 +462,7 @@ export async function pairPrinter(): Promise<void> {
   }
 }
 
+/** Forgets the printer entirely. Getting it back takes the chooser again. */
 export async function disconnectPrinter(): Promise<void> {
   await discardPrinter()
   setState({ status: 'idle', deviceName: null, percent: 0, message: null })
@@ -326,54 +480,82 @@ export function isPrinterReady(): boolean {
  * Unlike `pairPrinter`, this **rejects** on failure: it runs inside the sale flow,
  * where `Pos.tsx` has to stop treating the receipt as handled and offer its manual
  * retry instead. There is no share-sheet fallback any more, so a rejection here is
- * the only signal that the receipt is not on paper. Callers can branch on
- * `PrinterJobError.kind`
- * to tell "nothing paired" from "the job failed", or pass the thrown value to
- * `describePrinterError`.
+ * the only signal that the receipt is not on paper. Callers branch on
+ * `PrinterJobError.kind` and read `.percent` for how far a broken transfer got, or
+ * pass the thrown value to `describePrinterError`.
+ *
+ * A printer that is paired but momentarily off the link is waited for, briefly: a
+ * sale that lands while the printer is coming back should still print.
  *
  * A resolved promise means the last byte reached the printer, not that the paper
  * has finished moving — do not tear down the done screen on this alone.
  */
 export async function printPng(blob: Blob): Promise<void> {
-  const current = printer
-  if (!current?.connected) {
+  if (jobRunning) {
+    throw new PrinterJobError(describePrinterError(new PrinterBusyError('busy')), 'busy')
+  }
+  if (!printer) {
     throw new PrinterJobError('Нема спарен печатач. Спарете печатач во Поставки.', 'not-connected')
   }
-
-  setState({ status: 'printing', percent: 0, message: 'Сметката се испраќа кон печатачот...' })
-
-  // Chunks arrive in the hundreds; only a changed whole percent is worth a render.
-  let lastPercent = -1
-  const progress = (sent: number, total: number) => {
-    const pct = total > 0 ? Math.min(100, Math.round((sent / total) * 100)) : 0
-    if (pct === lastPercent) return
-    lastPercent = pct
-    setState({ percent: pct })
-  }
+  jobRunning = true
+  let lastPercent = 0
 
   try {
-    // Decodes the PNG and dithers it to the printer's 384px raster; the returned
-    // preview canvas is the exact monochrome image the printer receives.
-    const { raster } = await preparePngImage(blob)
-    await current.printRasterImage(raster, { blackening: BLACKENING, progress })
-    await current.feed(FEED_STEPS)
-    setState({
-      status: 'ready',
-      percent: 100,
-      message: 'Сметката е испратена до печатачот.'
-    })
-  } catch (err) {
-    // A failed transfer may have been half delivered, so the library will refuse
-    // every further job on this link. Tear it down and drop to 'idle' rather than
-    // 'ready', which makes the next attempt a deliberate re-pair. Never auto-retry.
-    await discardPrinter()
-    setState({
-      status: 'idle',
-      deviceName: null,
-      percent: 0,
-      message: describePrinterError(err)
-    })
-    // The library's error is kept as `cause` so a debug log can still name it.
-    throw new PrinterJobError(describePrinterError(err), 'transfer-failed', { cause: err })
+    if (!printer.connected && !(await waitForLink(PRINT_WAIT_FOR_LINK_MS))) {
+      throw new PrinterJobError(
+        'Печатачот не е поврзан. Вклучете го — сметката чека и може да се прати штом се поврзе.',
+        'not-connected'
+      )
+    }
+    const current = printer
+    if (!current?.connected) {
+      throw new PrinterJobError('Нема спарен печатач. Спарете печатач во Поставки.', 'not-connected')
+    }
+
+    setState({ status: 'printing', percent: 0, message: 'Сметката се испраќа кон печатачот...' })
+
+    // Chunks arrive in the hundreds; only a changed whole percent is worth a render.
+    const progress = (sent: number, total: number) => {
+      const pct = total > 0 ? Math.min(100, Math.round((sent / total) * 100)) : 0
+      if (pct === lastPercent) return
+      lastPercent = pct
+      setState({ percent: pct })
+    }
+
+    try {
+      // Decodes the PNG and dithers it to the printer's 384px raster; the returned
+      // preview canvas is the exact monochrome image the printer receives.
+      const { raster } = await preparePngImage(blob)
+      await current.printRasterImage(raster, { blackening: BLACKENING, progress })
+      await current.feed(FEED_STEPS)
+      setState({
+        status: 'ready',
+        percent: 100,
+        message: 'Сметката е испратена до печатачот.'
+      })
+    } catch (err) {
+      // Read before disconnect(), which would make every failure look like a lost link.
+      const linkLost = err instanceof PrinterDisconnectedError || !current.connected
+      // The library refuses every further job on this link until a fresh connect(),
+      // because a failed transfer may have been half delivered. Close it — keeping the
+      // instance — and let the reconnect loop open a clean one. Never re-send the job:
+      // part of this receipt may already be hanging out of the printer.
+      try {
+        await current.disconnect()
+      } catch {
+        // Already gone, which is where we were heading.
+      }
+      const message = describePrinterError(err)
+      if (printer === current) {
+        void startReconnect({ message: `${message} Се поврзува повторно…` })
+      }
+      // The library's error is kept as `cause` so a debug log can still name it.
+      throw new PrinterJobError(message, linkLost ? 'link-lost' : 'transfer-failed', {
+        cause: err,
+        percent: lastPercent
+      })
+    }
+  } finally {
+    jobRunning = false
   }
 }
